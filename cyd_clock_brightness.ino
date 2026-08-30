@@ -266,6 +266,17 @@ static lv_obj_t * lbl_sw_start;       // play/pause symbol on the start button
 static bool       sw_running = false;
 static uint32_t   sw_accum_ms = 0;    // accumulated while stopped
 static uint32_t   sw_t0 = 0;          // millis() at the last start
+static lv_timer_t * sw_fast_timer;    // hundredths refresh, runs only while needed
+static lv_obj_t * row_sw_lap[SW_LAPS];    // lap lines (number + time), newest first
+static lv_obj_t * label_sw_lap_no[SW_LAPS];
+static lv_obj_t * label_sw_lap[SW_LAPS];  // lap (interval) time
+static lv_obj_t * label_sw_lap_cum[SW_LAPS]; // cumulative time at that lap
+static uint32_t   sw_lap_ms[SW_LAPS];     // lap (interval) times, newest first
+static uint32_t   sw_lap_split[SW_LAPS];  // elapsed total when each lap was taken
+static int        sw_lap_no[SW_LAPS];     // lap numbers matching sw_lap_ms
+static int        sw_lap_shown = 0;       // how many lines are filled
+static int        sw_lap_count = 0;       // laps taken since reset
+static uint32_t   sw_last_split = 0;      // elapsed at the previous lap
 
 static lv_obj_t * face_tm;            // countdown timer
 static lv_obj_t * label_tm_time;      // "05:00"
@@ -548,6 +559,17 @@ static void theme_apply(void) {
   cal_refresh_now();   // calendar ink is theme-dependent
 }
 
+// The hundredths digits need a much faster refresh than the 100 ms UI tick
+// to roll smoothly, so they get their own lv_timer. It only runs while the
+// stopwatch is running AND its face is on screen; otherwise it is paused
+// and costs nothing.
+static void sw_fast_sync(void) {
+  if (!sw_fast_timer) return;
+  bool on = sw_running && face_sw && !lv_obj_has_flag(face_sw, LV_OBJ_FLAG_HIDDEN);
+  if (on) lv_timer_resume(sw_fast_timer);
+  else    lv_timer_pause(sw_fast_timer);
+}
+
 static void face_apply(void) {
   lv_obj_t * faces[FACE_COUNT] = { face_digital, face_analog, face_cal,
                                    face_sw, face_tm };
@@ -555,6 +577,7 @@ static void face_apply(void) {
     if (i == face_mode) lv_obj_remove_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_add_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
   }
+  sw_fast_sync();
 }
 
 // ---- Stopwatch -------------------------------------------------------------
@@ -569,8 +592,60 @@ static void sw_update_label(void) {
   snprintf(buf, sizeof(buf), "%02lu:%02lu",
            (unsigned long)((s / 60) % 100), (unsigned long)(s % 60));
   lv_label_set_text(label_sw_time, buf);
-  snprintf(buf, sizeof(buf), ".%lu", (unsigned long)((ms / 100) % 10));
+  snprintf(buf, sizeof(buf), ".%02lu", (unsigned long)((ms / 10) % 100));
   lv_label_set_text(label_sw_frac, buf);
+}
+
+static void sw_fmt_ms(char * buf, size_t n, uint32_t ms) {
+  uint32_t sec = ms / 1000;
+  snprintf(buf, n, "%02lu:%02lu.%02lu",
+           (unsigned long)((sec / 60) % 100), (unsigned long)(sec % 60),
+           (unsigned long)((ms / 10) % 100));
+}
+
+// Lap lines: [N] [lap time] [cumulative time] with fixed gaps, newest on
+// top; unused lines are hidden.
+static void sw_lap_refresh(void) {
+  for (int i = 0; i < SW_LAPS; i++) {
+    if (i < sw_lap_shown) {
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%d", sw_lap_no[i]);
+      lv_label_set_text(label_sw_lap_no[i], buf);
+      sw_fmt_ms(buf, sizeof(buf), sw_lap_ms[i]);
+      lv_label_set_text(label_sw_lap[i], buf);
+      sw_fmt_ms(buf, sizeof(buf), sw_lap_split[i]);
+      lv_label_set_text(label_sw_lap_cum[i], buf);
+      lv_obj_remove_flag(row_sw_lap[i], LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(row_sw_lap[i], LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
+// Record a lap at the current elapsed time: the interval since the previous
+// lap (or since start) plus the cumulative total. The list keeps the last
+// SW_LAPS laps, numbered from 1. Used by the LAP button and by Stop, so the
+// final segment is captured too.
+static void sw_lap_record(void) {
+  uint32_t now_ms = sw_elapsed_ms();
+  for (int i = SW_LAPS - 1; i > 0; i--) {
+    sw_lap_ms[i]    = sw_lap_ms[i - 1];
+    sw_lap_split[i] = sw_lap_split[i - 1];
+    sw_lap_no[i]    = sw_lap_no[i - 1];
+  }
+  sw_lap_ms[0]    = now_ms - sw_last_split;
+  sw_lap_split[0] = now_ms;
+  sw_lap_no[0]    = ++sw_lap_count;
+  sw_last_split = now_ms;
+  if (sw_lap_shown < SW_LAPS) sw_lap_shown++;
+  sw_lap_refresh();
+}
+
+static void sw_lap_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  if (!sw_running) return;   // laps only make sense while running
+  sw_lap_record();
 }
 
 static void sw_start_cb(lv_event_t * e) {
@@ -579,11 +654,14 @@ static void sw_start_cb(lv_event_t * e) {
   if (sw_running) {
     sw_accum_ms += millis() - sw_t0;
     sw_running = false;
+    sw_lap_record();   // the final segment becomes the last lap
   } else {
     sw_t0 = millis();
     sw_running = true;
   }
   lv_label_set_text(lbl_sw_start, sw_running ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+  sw_update_label();   // freeze the exact value on stop
+  sw_fast_sync();
 }
 
 static void sw_reset_cb(lv_event_t * e) {
@@ -591,8 +669,13 @@ static void sw_reset_cb(lv_event_t * e) {
   if (millis() - last_gesture_ms < 600) return;
   sw_running = false;
   sw_accum_ms = 0;
+  sw_lap_shown = 0;
+  sw_lap_count = 0;
+  sw_last_split = 0;
   lv_label_set_text(lbl_sw_start, LV_SYMBOL_PLAY);
   sw_update_label();
+  sw_lap_refresh();
+  sw_fast_sync();
 }
 
 // ---- Countdown timer -------------------------------------------------------
@@ -682,9 +765,7 @@ static void sw_tm_tick(void) {
     if (millis() - alarm_t0 > TIMER_ALARM_MS) alarm_stop();
   }
 
-  if (face_sw && !lv_obj_has_flag(face_sw, LV_OBJ_FLAG_HIDDEN) && sw_running) {
-    sw_update_label();
-  }
+  // (the running stopwatch display is repainted by sw_fast_timer)
 }
 
 // A tap anywhere on the clock face toggles the panel: open when hidden,
@@ -1405,15 +1486,17 @@ static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
   return b;
 }
 
-// ============ Stopwatch face: [ 12:34 .7 ]  [>] [reset] ==================
+// ============ Stopwatch face: [ 12:34 .07 ]  laps x3  [>] [LAP] [reset] ====
 static void create_stopwatch_face(void) {
   face_sw = make_box(lv_screen_active());
   lv_obj_set_size(face_sw, lv_pct(100), lv_pct(100));
-  make_card(face_sw, 300, 104, LV_ALIGN_CENTER, 0, -34, DEPTH_SHADOW_W);  // display window
+  // Display window at the top (y 12..104), lap lines below it, buttons at
+  // the bottom.
+  make_card(face_sw, 300, 92, LV_ALIGN_CENTER, 0, -62, DEPTH_SHADOW_W);
 
   lv_obj_t * row = make_box(face_sw);
   lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(row, LV_ALIGN_CENTER, 0, -34);
+  lv_obj_align(row, LV_ALIGN_CENTER, 0, -62);
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(row, 4, 0);
@@ -1423,15 +1506,54 @@ static void create_stopwatch_face(void) {
   lv_obj_set_style_text_font(label_sw_time, FONT_TIME, 0);
 
   label_sw_frac = lv_label_create(row);
-  lv_label_set_text(label_sw_frac, ".0");
+  lv_label_set_text(label_sw_frac, ".00");
   lv_obj_set_style_text_font(label_sw_frac, FONT_LUNAR_NUM, 0);
 
-  lv_obj_t * b = make_button(face_sw, LV_SYMBOL_PLAY, sw_start_cb, NULL, 100, 44);
-  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -62, -16);
+  // Lap lines (newest first): [number][gap][lap time][gap][cumulative],
+  // DSEG italic like the rest of the digits. The number is right-aligned in
+  // a fixed cell so the time columns line up even when laps pass 9; the
+  // cumulative column is drawn a little dimmer to tell the two apart.
+  for (int i = 0; i < SW_LAPS; i++) {
+    lv_obj_t * r = make_box(face_sw);
+    lv_obj_set_size(r, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(r, LV_ALIGN_TOP_MID, 0, 110 + i * 24);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(r, SW_LAP_GAP_PX, 0);
+    lv_obj_add_flag(r, LV_OBJ_FLAG_HIDDEN);
+    row_sw_lap[i] = r;
+
+    label_sw_lap_no[i] = lv_label_create(r);
+    lv_label_set_text(label_sw_lap_no[i], "");
+    lv_obj_set_style_text_font(label_sw_lap_no[i], FONT_LUNAR_NUM_SM, 0);
+    lv_obj_set_width(label_sw_lap_no[i], 34);
+    lv_obj_set_style_text_align(label_sw_lap_no[i], LV_TEXT_ALIGN_RIGHT, 0);
+
+    label_sw_lap[i] = lv_label_create(r);
+    lv_label_set_text(label_sw_lap[i], "");
+    lv_obj_set_style_text_font(label_sw_lap[i], FONT_LUNAR_NUM_SM, 0);
+
+    label_sw_lap_cum[i] = lv_label_create(r);
+    lv_label_set_text(label_sw_lap_cum[i], "");
+    lv_obj_set_style_text_font(label_sw_lap_cum[i], FONT_LUNAR_NUM_SM, 0);
+    lv_obj_set_style_text_opa(label_sw_lap_cum[i], SW_LAP_CUM_OPA, 0);
+  }
+
+  lv_obj_t * b = make_button(face_sw, LV_SYMBOL_PLAY, sw_start_cb, NULL, 88, 40);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -100, -6);
   lbl_sw_start = lv_obj_get_child(b, 0);
 
-  b = make_button(face_sw, LV_SYMBOL_REFRESH, sw_reset_cb, NULL, 100, 44);
-  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 62, -16);
+  b = make_button(face_sw, "LAP", sw_lap_cb, NULL, 88, 40);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 0, -6);
+
+  b = make_button(face_sw, LV_SYMBOL_REFRESH, sw_reset_cb, NULL, 88, 40);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 100, -6);
+
+  sw_fast_timer = lv_timer_create([](lv_timer_t * t) { LV_UNUSED(t); sw_update_label(); },
+                                  SW_DISPLAY_MS, NULL);
+  lv_timer_pause(sw_fast_timer);   // sw_fast_sync() resumes it when needed
+
+  sw_update_label();   // real format from the start ("00:00" ".00"), not placeholders
 }
 
 // ============ Timer face: [ 05:00 ]  [+1m][+5m][+10m]  [>] [reset] ========

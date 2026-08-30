@@ -5,8 +5,9 @@
  *                        festival names shown by korean_calendar.h
  *   font_dseg_lunar_26 - DSEG7 Classic Italic 26 px "0123456789.",
  *                        same face/size as font_dseg_26 in clock_fonts.h
- *   font_dseg_lunar_20 - 20 px variant of the above, for the analog face's
- *                        info column
+ *   font_dseg_lunar_20 - 20 px variant with ':' and space added
+ *                        ("0123456789.: "), for the analog face's info
+ *                        column and the stopwatch lap lines
  *
  * NanumGothic (c) NAVER - SIL Open Font License 1.1
  * DSEG (c) Keshikan - SIL Open Font License 1.1
@@ -2495,7 +2496,7 @@ lv_font_t font_dseg_lunar_26 = {
 /*******************************************************************************
  * Size: 20 px
  * Bpp: 4
- * Opts: --font DSEG7Classic-Italic-no7F.ttf --size 20 --bpp 4 --format lvgl --symbols 0123456789. --lv-include lvgl.h --no-compress -o font_dseg_lunar_20.c
+ * Opts: --font DSEG7Classic-Italic-no7F.ttf --size 20 --bpp 4 --format lvgl --symbols 0123456789.:  --lv-include lvgl.h --no-compress -o font_dseg_lunar_20.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE
@@ -2516,6 +2517,8 @@ lv_font_t font_dseg_lunar_26 = {
 
 /*Store the image of the glyphs*/
 static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap_dseglunar20[] = {
+    /* U+0020 " " */
+
     /* U+002E "." */
     0x3, 0x50, 0xf, 0xf4, 0xc, 0xe1,
 
@@ -2703,7 +2706,12 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap_dseglunar20[] = {
     0x0, 0x0, 0x0, 0x0, 0x1, 0xfc, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x2, 0xfa, 0x0, 0x1c, 0xdd,
     0xdd, 0xdd, 0xdb, 0xa7, 0x0, 0xaf, 0xff, 0xff,
-    0xff, 0xff, 0x50, 0x0
+    0xff, 0xff, 0x50, 0x0,
+
+    /* U+003A ":" */
+    0x2, 0x60, 0xc, 0xf8, 0x8, 0xf4, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x6, 0x20, 0x8f, 0xc0, 0x4f, 0x80
 };
 
 
@@ -2713,6 +2721,7 @@ static LV_ATTRIBUTE_LARGE_CONST const uint8_t glyph_bitmap_dseglunar20[] = {
 
 static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc_dseglunar20[] = {
     {.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* id = 0 reserved */,
+    {.bitmap_index = 0, .adv_w = 64, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0},
     {.bitmap_index = 0, .adv_w = 92, .box_w = 4, .box_h = 3, .ofs_x = 2, .ofs_y = 0},
     {.bitmap_index = 6, .adv_w = 261, .box_w = 15, .box_h = 20, .ofs_x = 1, .ofs_y = 0},
     {.bitmap_index = 156, .adv_w = 261, .box_w = 5, .box_h = 19, .ofs_x = 11, .ofs_y = 1},
@@ -2723,24 +2732,28 @@ static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc_dseglunar20[] = {
     {.bitmap_index = 757, .adv_w = 261, .box_w = 14, .box_h = 20, .ofs_x = 1, .ofs_y = 0},
     {.bitmap_index = 897, .adv_w = 261, .box_w = 12, .box_h = 20, .ofs_x = 2, .ofs_y = 0},
     {.bitmap_index = 1017, .adv_w = 261, .box_w = 15, .box_h = 20, .ofs_x = 1, .ofs_y = 0},
-    {.bitmap_index = 1167, .adv_w = 261, .box_w = 14, .box_h = 20, .ofs_x = 2, .ofs_y = 0}
+    {.bitmap_index = 1167, .adv_w = 261, .box_w = 14, .box_h = 20, .ofs_x = 2, .ofs_y = 0},
+    {.bitmap_index = 1307, .adv_w = 64, .box_w = 4, .box_h = 11, .ofs_x = 0, .ofs_y = 4}
 };
 
 /*---------------------
  *  CHARACTER MAPPING
  *--------------------*/
 
-static const uint8_t glyph_id_ofs_list_0_dseglunar20[] = {
-    0, 0, 1, 2, 3, 4, 5, 6,
-    7, 8, 9, 10
+static const uint16_t unicode_list_0_dseglunar20[] = {
+    0x0, 0xe
 };
 
 /*Collect the unicode lists and glyph_id offsets*/
 static const lv_font_fmt_txt_cmap_t cmaps_dseglunar20[] =
 {
     {
-        .range_start = 46, .range_length = 12, .glyph_id_start = 1,
-        .unicode_list = NULL, .glyph_id_ofs_list = glyph_id_ofs_list_0_dseglunar20, .list_length = 12, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_FULL
+        .range_start = 32, .range_length = 15, .glyph_id_start = 1,
+        .unicode_list = unicode_list_0_dseglunar20, .glyph_id_ofs_list = NULL, .list_length = 2, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY
+    },
+    {
+        .range_start = 48, .range_length = 11, .glyph_id_start = 3,
+        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, .type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY
     }
 };
 
@@ -2765,7 +2778,7 @@ static lv_font_fmt_txt_dsc_t font_dsc_dseglunar20 = {
     .cmaps = cmaps_dseglunar20,
     .kern_dsc = NULL,
     .kern_scale = 0,
-    .cmap_num = 1,
+    .cmap_num = 2,
     .bpp = 4,
     .kern_classes = 0,
     .bitmap_format = 0,
