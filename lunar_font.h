@@ -1067,9 +1067,9 @@ static const lv_font_fmt_txt_dsc_t font_dsc_krlunar22 = {
 #else
 static lv_font_fmt_txt_dsc_t font_dsc_krlunar22 = {
 #endif
-    .glyph_bitmap_krlunar22 = glyph_bitmap_krlunar22,
-    .glyph_dsc_krlunar22 = glyph_dsc_krlunar22,
-    .cmaps_krlunar22 = cmaps_krlunar22,
+    .glyph_bitmap = glyph_bitmap_krlunar22,
+    .glyph_dsc = glyph_dsc_krlunar22,
+    .cmaps = cmaps_krlunar22,
     .kern_dsc = NULL,
     .kern_scale = 0,
     .cmap_num = 1,
@@ -1077,7 +1077,7 @@ static lv_font_fmt_txt_dsc_t font_dsc_krlunar22 = {
     .kern_classes = 0,
     .bitmap_format = 0,
 #if LVGL_VERSION_MAJOR == 8
-    .cache_krlunar22 = &cache_krlunar22
+    .cache = &cache_krlunar22
 #endif
 };
 
