@@ -23,9 +23,12 @@
       - touch the screen to bring up a backlight brightness slider
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
 
-    REQUIRED FILE in the same folder as this .ino:
-      clock_fonts.h   - DSEG7 68/30/26 px + NanumGothic 26 px
-                        AND font_dseg_bold_68 (see below)
+    REQUIRED FILES in the same folder as this .ino:
+      clock_fonts.h     - DSEG7 68/30/26 px + NanumGothic 26 px
+                          AND font_dseg_bold_68 (see below)
+      lunar_font.h      - NanumGothic 22 px subset + DSEG 26 px with '.'
+      korean_calendar.h - lunar calendar, solar terms, holiday tables
+      secrets.h         - Wi-Fi credentials (copy secrets.h.example)
 
     The bold face is a new addition. Generate it with:
 
@@ -79,7 +82,7 @@ const char* password = WIFI_PASSWORD;
 uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 
 // HH:MM uses the Bold weight; the smaller fields stay Regular so the time
-// stands out. Swap in font_dseg_heavy_68 here if Bold is still too light.
+// stands out. Swap in font_dseg_68 here for the thinner Regular weight.
 #define FONT_TIME     &font_dseg_bold_68   // HH:MM
 #define FONT_SEC      &font_dseg_30        // seconds
 #define FONT_DATENUM  &font_dseg_26        // date digits
@@ -379,7 +382,7 @@ static void bl_apply(void) {
 }
 
 #if AUTO_BL
-// Called at the indev/timer rate (200 ms). EMA smoothing keeps the panel
+// Called from timer_cb, i.e. every 200 ms. EMA smoothing keeps the panel
 // from pumping when a hand or shadow passes over the sensor.
 static void auto_bl_update(void) {
   int raw = analogRead(LDR_PIN);
@@ -759,8 +762,8 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_pad_all(bl_panel, 8, 0);
   lv_obj_add_event_cb(bl_panel, bl_panel_press_cb, LV_EVENT_PRESSED, NULL);
 
-  // The bundled Korean font only contains the seven weekday glyphs, so this
-  // label stays numeric.
+  // Neither bundled Korean subset covers generic UI text (weekdays and
+  // calendar names only), so this label stays numeric.
   bl_pct_label = lv_label_create(bl_panel);
   lv_obj_set_style_text_font(bl_pct_label, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(bl_pct_label, lv_color_hex(0xFFFFFF), 0);
@@ -906,7 +909,7 @@ static void create_analog_face(void) {
 
 void lv_create_main_gui(void) {
 
-  // 검은 배경 + 주황 세그먼트
+  // 흰 배경 + 주황 세그먼트
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(0xFF3300), 0);
