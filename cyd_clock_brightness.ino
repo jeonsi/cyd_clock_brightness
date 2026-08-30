@@ -884,6 +884,21 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
 #endif
 
     x += TOUCH_TRIM_X;
+
+  // Rail check: a real touch never drives an axis to the ADC rails (this
+  // panel's corners sit at 315..3837 / 154..3718). A reading at 0 or 4095
+  // is the panel floating - typically the frame right after a finger
+  // lifts, when X saturates while Z still shows ~100 of noise - and would
+  // otherwise pass the pressure threshold as a ghost tap in a corner.
+  if (rx < TOUCH_RAW_RAIL || rx > 4095 - TOUCH_RAW_RAIL ||
+      ry < TOUCH_RAW_RAIL || ry > 4095 - TOUCH_RAW_RAIL) {
+#if TOUCH_DEBUG
+    if (z >= TOUCH_Z_RELEASE)
+      Serial.printf("  rail: raw=(%ld,%ld) z=%d -> not a contact\n", (long)rx, (long)ry, z);
+#endif
+    z = 0;
+  }
+
     y += TOUCH_TRIM_Y;
 
     if (x < 0) x = 0;
