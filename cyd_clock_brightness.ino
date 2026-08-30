@@ -267,11 +267,11 @@ static bool       sw_running = false;
 static uint32_t   sw_accum_ms = 0;    // accumulated while stopped
 static uint32_t   sw_t0 = 0;          // millis() at the last start
 static lv_timer_t * sw_fast_timer;    // hundredths refresh, runs only while needed
-static lv_obj_t * row_sw_lap[SW_LAPS];    // lap lines (number + time), newest first
+static lv_obj_t * row_sw_lap[SW_LAPS];    // lap lines (number + time), oldest first
 static lv_obj_t * label_sw_lap_no[SW_LAPS];
 static lv_obj_t * label_sw_lap[SW_LAPS];  // lap (interval) time
 static lv_obj_t * label_sw_lap_cum[SW_LAPS]; // cumulative time at that lap
-static uint32_t   sw_lap_ms[SW_LAPS];     // lap (interval) times, newest first
+static uint32_t   sw_lap_ms[SW_LAPS];     // lap (interval) times, oldest first
 static uint32_t   sw_lap_split[SW_LAPS];  // elapsed total when each lap was taken
 static int        sw_lap_no[SW_LAPS];     // lap numbers matching sw_lap_ms
 static int        sw_lap_shown = 0;       // how many lines are filled
@@ -603,8 +603,8 @@ static void sw_fmt_ms(char * buf, size_t n, uint32_t ms) {
            (unsigned long)((ms / 10) % 100));
 }
 
-// Lap lines: [N] [lap time] [cumulative time] with fixed gaps, newest on
-// top; unused lines are hidden.
+// Lap lines: [N] [lap time] [cumulative time] with fixed gaps, filled top
+// to bottom in the order taken; unused lines are hidden.
 static void sw_lap_refresh(void) {
   for (int i = 0; i < SW_LAPS; i++) {
     if (i < sw_lap_shown) {
@@ -623,21 +623,26 @@ static void sw_lap_refresh(void) {
 }
 
 // Record a lap at the current elapsed time: the interval since the previous
-// lap (or since start) plus the cumulative total. The list keeps the last
-// SW_LAPS laps, numbered from 1. Used by the LAP button and by Stop, so the
+// lap (or since start) plus the cumulative total. New laps are appended at
+// the bottom; once SW_LAPS lines are full the oldest scrolls off the top.
+// Laps are numbered from 1. Used by the LAP button and by Stop, so the
 // final segment is captured too.
 static void sw_lap_record(void) {
   uint32_t now_ms = sw_elapsed_ms();
-  for (int i = SW_LAPS - 1; i > 0; i--) {
-    sw_lap_ms[i]    = sw_lap_ms[i - 1];
-    sw_lap_split[i] = sw_lap_split[i - 1];
-    sw_lap_no[i]    = sw_lap_no[i - 1];
+  if (sw_lap_shown == SW_LAPS) {
+    for (int i = 0; i < SW_LAPS - 1; i++) {
+      sw_lap_ms[i]    = sw_lap_ms[i + 1];
+      sw_lap_split[i] = sw_lap_split[i + 1];
+      sw_lap_no[i]    = sw_lap_no[i + 1];
+    }
+  } else {
+    sw_lap_shown++;
   }
-  sw_lap_ms[0]    = now_ms - sw_last_split;
-  sw_lap_split[0] = now_ms;
-  sw_lap_no[0]    = ++sw_lap_count;
+  int k = sw_lap_shown - 1;
+  sw_lap_ms[k]    = now_ms - sw_last_split;
+  sw_lap_split[k] = now_ms;
+  sw_lap_no[k]    = ++sw_lap_count;
   sw_last_split = now_ms;
-  if (sw_lap_shown < SW_LAPS) sw_lap_shown++;
   sw_lap_refresh();
 }
 
@@ -1486,7 +1491,7 @@ static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
   return b;
 }
 
-// ============ Stopwatch face: [ 12:34 .07 ]  laps x3  [>] [LAP] [reset] ====
+// ============ Stopwatch face: [ 12:34 .07 ]  laps x3 (top-down)  [>] [LAP] [reset]
 static void create_stopwatch_face(void) {
   face_sw = make_box(lv_screen_active());
   lv_obj_set_size(face_sw, lv_pct(100), lv_pct(100));
@@ -1509,7 +1514,8 @@ static void create_stopwatch_face(void) {
   lv_label_set_text(label_sw_frac, ".00");
   lv_obj_set_style_text_font(label_sw_frac, FONT_LUNAR_NUM, 0);
 
-  // Lap lines (newest first): [number][gap][lap time][gap][cumulative],
+  // Lap lines (oldest first, new ones appended below):
+  // [number][gap][lap time][gap][cumulative],
   // DSEG italic like the rest of the digits. The number is right-aligned in
   // a fixed cell so the time columns line up even when laps pass 9; the
   // cumulative column is drawn a little dimmer to tell the two apart.
