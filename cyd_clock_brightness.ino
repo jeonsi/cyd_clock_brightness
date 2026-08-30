@@ -302,8 +302,9 @@ static lv_obj_t * label_bell_a;         // same, on the analog face
 typedef struct {
   int     hh, mm;
   bool    enabled;
-  uint8_t days;      // weekday mask, bit 0 = Sunday (tm_wday)
-  bool    once;      // ring once, then switch itself OFF
+  uint8_t days;       // weekday mask, bit 0 = Sunday (tm_wday)
+  bool    once;       // ring once, then switch itself OFF
+  uint8_t days_saved; // mask to restore when 1x is switched off again (RAM only)
 } alarm_t;
 static alarm_t    alarms[ALARM_COUNT];   // all kept in NVS
 static int        al_sel = 0;            // alarm being edited on the face
@@ -1317,6 +1318,18 @@ static void al_mark_dirty(void) {
   al_dirty_ms = millis();
 }
 
+// 1x mode keeps exactly one weekday selected: the day of the alarm's next
+// occurrence - today if its time is still ahead, otherwise tomorrow.
+static void al_once_pick_day(alarm_t * a) {
+  time_t now = time(nullptr);
+  struct tm t;
+  localtime_r(&now, &t);
+  int now_min = t.tm_hour * 60 + t.tm_min;
+  int al_min  = a->hh * 60 + a->mm;
+  int wday = (al_min > now_min) ? t.tm_wday : (t.tm_wday + 1) % 7;
+  a->days = (uint8_t)(1 << wday);
+}
+
 // H-/H+/M-/M+ : user_data is the step in minutes. A tap steps once; holding
 // the button repeats (LV_EVENT_LONG_PRESSED_REPEAT) for fast adjustment.
 static void al_adjust_cb(lv_event_t * e) {
@@ -1334,6 +1347,7 @@ static void al_adjust_cb(lv_event_t * e) {
   if (total < 0) total += 24 * 60;
   a->hh = total / 60;
   a->mm = total % 60;
+  if (a->once) al_once_pick_day(a);   // the next occurrence may have moved to the other day
   al_update_label();
   al_mark_dirty();
 }
@@ -1355,15 +1369,25 @@ static void al_day_cb(lv_event_t * e) {
   uint8_t next = a->days ^ (uint8_t)(1 << d);
   if (next == 0) return;
   a->days = next;
+  a->once = false;   // hand-picked days mean a repeating alarm again
   al_update_label();
   al_mark_dirty();
 }
 
 // "1x": ring at the next matching time, then switch the alarm OFF by itself.
+// Turning it on narrows the weekdays to the day of that next occurrence;
+// turning it off restores the days that were selected before.
 static void al_once_cb(lv_event_t * e) {
   LV_UNUSED(e);
   if (millis() - last_gesture_ms < 600) return;
-  alarms[al_sel].once = !alarms[al_sel].once;
+  alarm_t * a = &alarms[al_sel];
+  a->once = !a->once;
+  if (a->once) {
+    a->days_saved = a->days;
+    al_once_pick_day(a);
+  } else {
+    a->days = a->days_saved ? a->days_saved : 0x7F;
+  }
   al_update_label();
   al_mark_dirty();
 }
@@ -2232,6 +2256,7 @@ void setup() {
     if (a->hh < 0 || a->hh > 23) a->hh = ALARM_DEFAULT_HH;
     if (a->mm < 0 || a->mm > 59) a->mm = ALARM_DEFAULT_MM;
     if (a->days == 0) a->days = 0x7F;
+    a->days_saved = 0x7F;
   }
 
   // Touch controller on its own SPI bus, driven directly (see xpt_frame)
