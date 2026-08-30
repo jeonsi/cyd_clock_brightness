@@ -363,9 +363,18 @@ static lv_obj_t * label_lunar_term;  // current solar term
 
 // ======================= Stopwatch / Timer ================================
 // Buttons use LVGL's built-in FontAwesome symbols (play/pause/refresh), so
-// no extra font glyphs are needed. The countdown timer rings the CYD's
-// speaker and flashes an overlay until tapped or TIMER_ALARM_MS passes.
-#define SPK_PIN         26
+// no extra font glyphs are needed. The countdown timer beeps and flashes an
+// overlay until tapped or TIMER_ALARM_MS passes.
+//
+// Where the beeper lives:
+//   27 - direct GPIO drive for a PASSIVE PIEZO buzzer wired between the
+//        CN1 connector's IO27 and GND pins (CN1: GND / IO22 / IO27 / 3V3).
+//        No amplifier involved; polarity does not matter.
+//   26 - the on-board 8002 amplifier feeding the SPEAK connector, for a
+//        dynamic speaker (4-8 ohm). Use this on boards whose amp actually
+//        works; on this unit SPEAK only ever produced a few mV, so the
+//        piezo-on-CN1 route is the default.
+#define SPK_PIN         27
 #define SPK_CHANNEL     2                        // ESP32 Arduino core 2.x only
 #define TIMER_ALARM_MS  (30 * 1000)
 #define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
@@ -1761,10 +1770,12 @@ void setup() {
   }
   spk_tone(0);
 
-  // Phase 2 drives the DAC directly (GPIO 26 is DAC2), bypassing LEDC and
-  // the GPIO matrix. Sound here but not in phase 1 -> LEDC setup problem;
-  // silence in both with verified wiring -> the on-board 8002 amp or its
-  // power is the suspect.
+  // Phase 2 drives the DAC directly, bypassing LEDC and the GPIO matrix -
+  // only possible when SPK_PIN is a DAC pin (25 or 26, i.e. the amp path).
+  // Sound here but not in phase 1 -> LEDC setup problem; silence in both
+  // with verified wiring -> the on-board 8002 amp or its power is the
+  // suspect.
+#if SPK_PIN == 25 || SPK_PIN == 26
   Serial.println("Speaker test 2: DAC square wave 1 kHz, 2 s");
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcDetach(SPK_PIN);
@@ -1788,6 +1799,7 @@ void setup() {
   ledcAttachPin(SPK_PIN, SPK_CHANNEL);
   ledcWriteTone(SPK_CHANNEL, 0);
 #endif
+#endif  /* DAC-capable SPK_PIN */
 #endif
 
 #if BOOT_BEEP
