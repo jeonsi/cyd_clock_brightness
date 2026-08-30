@@ -163,6 +163,12 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // sees a stream of press/release pairs instead of one continuous drag.
 #define TOUCH_RELEASE_DEBOUNCE_MS 60
 
+// Swipe (face switch) recognition. LVGL's defaults (50 px travel, velocity 3)
+// are tuned for capacitive panels and feel sluggish on this resistive one.
+// A tap only moves a few px, so these can go quite low before false swipes.
+#define TOUCH_GESTURE_MIN_DIST 20   // px of travel to count as a swipe
+#define TOUCH_GESTURE_MIN_VEL  1    // px per indev period
+
 // Set to 1 to print raw + mapped touch coordinates on the serial monitor.
 // Note the mapped values are in the unrotated 240x320 space, so they will not
 // line up visually with where you pressed on the rotated screen.
@@ -1087,6 +1093,8 @@ void setup() {
   lv_indev_t * indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touchscreen_read);
+  lv_indev_set_gesture_min_distance(indev, TOUCH_GESTURE_MIN_DIST);
+  lv_indev_set_gesture_min_velocity(indev, TOUCH_GESTURE_MIN_VEL);
 
   // Boot status screen, replaced by the clock once time is known
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
