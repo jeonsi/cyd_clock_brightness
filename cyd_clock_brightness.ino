@@ -851,6 +851,8 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static bool     pressed = false;
   static int32_t  press_x = 0, press_y = 0;
   static int32_t  raw_last_x = 0, raw_last_y = 0;   // unfiltered, for swipes
+  static int32_t  peak_dh = 0, peak_dv = 0;         // largest RAW travel this press (swipes)
+  static int32_t  peak_flt = 0;                     // largest FILTERED travel (tap test)
   static bool     swipe_armed = false;
   static float    flt_x = 0, flt_y = 0;
 
@@ -882,6 +884,14 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
 
     raw_last_x = x;
     raw_last_y = y;
+    if (pressed) {
+      // Track the farthest point reached, not just the last sample: a
+      // finger often bounces back a little as it lifts. Raw travel feeds
+      // the swipe test (fast flicks must not be understated by the EMA).
+      int32_t dh_now = y - press_y, dv_now = x - press_x;
+      if (LV_ABS(dh_now) > LV_ABS(peak_dh)) peak_dh = dh_now;
+      if (LV_ABS(dv_now) > LV_ABS(peak_dv)) peak_dv = dv_now;
+    }
 
     if (!pressed) {
       // New press: remember where it started and seed the position filter.
@@ -891,12 +901,21 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       flt_y = (float)y;
       press_x = x;
       press_y = y;
+      peak_dh = peak_dv = 0;
+      peak_flt = 0;
       swipe_armed = (bl_panel == NULL) ||
                     lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
     } else {
       // EMA across frames: irons out the remaining wobble during drags
       flt_x += TOUCH_FILTER_ALPHA * ((float)x - flt_x);
       flt_y += TOUCH_FILTER_ALPHA * ((float)y - flt_y);
+      // Filtered travel feeds the tap test: a single-sample spike at press
+      // or release (common on a resistive panel) barely moves the EMA, so
+      // it cannot turn a real tap into "ambiguous movement".
+      int32_t fh = (int32_t)(flt_y + 0.5f) - press_y;
+      int32_t fv = (int32_t)(flt_x + 0.5f) - press_x;
+      int32_t ft = LV_MAX(LV_ABS(fh), LV_ABS(fv));
+      if (ft > peak_flt) peak_flt = ft;
     }
 
 #if TOUCH_DEBUG
@@ -914,14 +933,22 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   }
   else {
     if (pressed && swipe_armed && face_digital) {
-      // Release edge: displacement-based gesture check on the UNFILTERED
-      // native coordinates (the EMA lags fast flicks). The display is
-      // rotated 270 degrees, so screen-horizontal movement is the native Y
-      // axis. Any travel past the threshold is a gesture, never a tap;
-      // the larger axis decides its meaning.
-      int32_t dh = raw_last_y - press_y;
-      int32_t dv = raw_last_x - press_x;
-      if (LV_MAX(LV_ABS(dh), LV_ABS(dv)) >= TOUCH_SWIPE_MIN_PX) {
+      // Release edge. The display is rotated 270 degrees, so
+      // screen-horizontal movement is the native Y axis. Three outcomes:
+      //   raw peak travel >= TOUCH_SWIPE_MIN_PX  -> gesture, larger axis decides
+      //   filtered peak  >= TOUCH_TAP_MAX_PX     -> neither: a swipe that broke
+      //                                             up early must not become a tap
+      //   otherwise                              -> tap (LVGL's CLICKED goes through)
+      // Raw travel for the swipe test so fast flicks are not understated;
+      // filtered travel for the tap test so spikes do not swallow taps.
+      int32_t dh = peak_dh;
+      int32_t dv = peak_dv;
+      int32_t travel = LV_MAX(LV_ABS(dh), LV_ABS(dv));
+      int32_t min_px = TOUCH_SWIPE_MIN_PX;
+      if (travel < min_px && peak_flt >= TOUCH_TAP_MAX_PX) {
+        last_gesture_ms = millis();   // ambiguous movement: swallow the click, do nothing
+      }
+      else if (travel >= min_px) {
         last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
         if (LV_ABS(dh) >= LV_ABS(dv)) {
           // dh > 0 is a rightward swipe on screen (screen x = native y).
