@@ -238,8 +238,8 @@ static lv_obj_t * label_lunar_term;  // current solar term
 
 // The faces are full-screen sibling containers; exactly one is visible.
 // Swiping left/right cycles digital -> analog -> calendar -> stopwatch ->
-// timer -> alarm -> digital. On the calendar face, swiping up/down browses to the
-// next/previous month; leaving the face snaps back to the current month.
+// timer -> alarm -> digital. The calendar face has < > buttons to browse
+// months; leaving the face snaps back to the current month.
 #define FACE_COUNT 6
 #define FACE_CAL   2
 #define FACE_SW    3
@@ -1083,15 +1083,8 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
           face_apply();
           prefs.putInt("face", face_mode);
         }
-        else if (face_mode == FACE_CAL) {
-          // Vertical swipe on the calendar browses months: up (dv > 0,
-          // since screen y runs against native x) -> next, down -> previous.
-          cal_off += (dv > 0) ? 1 : -1;
-          if (cal_off >  CAL_OFF_MAX) cal_off =  CAL_OFF_MAX;
-          if (cal_off < -CAL_OFF_MAX) cal_off = -CAL_OFF_MAX;
-          cal_refresh_now();
-        }
-        // Vertical swipes on other faces are consumed with no action.
+        // Vertical swipes are consumed with no action (months are browsed
+        // with the calendar's < > buttons).
       }
     }
 
@@ -1765,7 +1758,16 @@ static void create_analog_face(void) {
   // created later (calendar, stopwatch, timer) at LVGL's default white.
 }
 
-// ============ Calendar face: month title, 일..토 header, 6x7 day grid =====
+// Month browsing: the < > buttons beside the title shift the viewed month,
+// clamped to +/-CAL_OFF_MAX; switching faces snaps back to the current one.
+static void cal_step_cb(lv_event_t * e) {
+  cal_off += (int)(intptr_t)lv_event_get_user_data(e);
+  if (cal_off >  CAL_OFF_MAX) cal_off =  CAL_OFF_MAX;
+  if (cal_off < -CAL_OFF_MAX) cal_off = -CAL_OFF_MAX;
+  cal_refresh_now();
+}
+
+// ============ Calendar face: month title, < > month buttons, 일..토 header, 6x7 grid
 // Static layout only - all texts and colors are filled by cal_refresh().
 static void create_calendar_face(void) {
   face_cal = make_box(lv_screen_active());
@@ -1777,6 +1779,12 @@ static void create_calendar_face(void) {
   lv_label_set_text(label_c_title, "");
   lv_obj_set_style_text_font(label_c_title, FONT_LUNAR_NUM, 0);   // DSEG with '.'
   lv_obj_align(label_c_title, LV_ALIGN_TOP_MID, 0, 2);
+
+  // Previous / next month, beside the title
+  lv_obj_t * b = make_button(face_cal, LV_SYMBOL_LEFT, cal_step_cb, (void *)(intptr_t)-1, 44, 26);
+  lv_obj_align(b, LV_ALIGN_TOP_LEFT, 6, 2);
+  b = make_button(face_cal, LV_SYMBOL_RIGHT, cal_step_cb, (void *)(intptr_t)1, 44, 26);
+  lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -6, 2);
 
   for (int i = 0; i < 7; i++) {
     label_c_wd[i] = lv_label_create(face_cal);
