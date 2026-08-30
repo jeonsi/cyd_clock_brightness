@@ -367,14 +367,14 @@ static lv_obj_t * label_lunar_term;  // current solar term
 // overlay until tapped or TIMER_ALARM_MS passes.
 //
 // Where the beeper lives:
+//   26 - the stock audio path: on-board 8002 amplifier feeding the SPEAK
+//        connector, for a dynamic speaker (4-8 ohm) or a piezo. GPIO 26 is
+//        not exposed anywhere else, so this only works if the amp does.
 //   27 - direct GPIO drive for a PASSIVE PIEZO buzzer wired between the
 //        CN1 connector's IO27 and GND pins (CN1: GND / IO22 / IO27 / 3V3).
-//        No amplifier involved; polarity does not matter.
-//   26 - the on-board 8002 amplifier feeding the SPEAK connector, for a
-//        dynamic speaker (4-8 ohm). Use this on boards whose amp actually
-//        works; on this unit SPEAK only ever produced a few mV, so the
-//        piezo-on-CN1 route is the default.
-#define SPK_PIN         27
+//        No amplifier involved; polarity does not matter. Use this when
+//        the amp is dead (symptom: only a few mV at SPEAK).
+#define SPK_PIN         26
 #define SPK_CHANNEL     2                        // ESP32 Arduino core 2.x only
 #define TIMER_ALARM_MS  (30 * 1000)
 #define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
