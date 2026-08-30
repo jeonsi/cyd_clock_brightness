@@ -371,6 +371,10 @@ static lv_obj_t * label_lunar_term;  // current solar term
 #define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
 #define ALARM_TONE_HZ   2000
 #define BOOT_BEEP       1    // double beep at power-on to verify the speaker
+// Speaker diagnosis: plays 1 s tones at 500/1000/2000/3000 Hz right after
+// boot, before anything else. Turn on when chasing a silent speaker, and
+// probe the SPEAK pads with a multimeter in AC mode while it runs.
+#define SPK_TEST        0
 
 // ======================= Hourly chime =====================================
 // Casio-style "pip-pip" at the top of every hour: two short high beeps
@@ -1734,14 +1738,28 @@ void setup() {
   analogSetPinAttenuation(LDR_PIN, ADC_11db);
 #endif
 
-  // Speaker for the timer alarm, silent until needed
+  // Speaker for the timer alarm, silent until needed. The channel is pinned
+  // to 2 explicitly: auto-allocation could hand out channel 1, which shares
+  // an LEDC timer with the backlight on channel 0, and two outputs at
+  // different frequencies must not share a timer.
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcAttach(SPK_PIN, ALARM_TONE_HZ, 10);
+  ledcAttachChannel(SPK_PIN, ALARM_TONE_HZ, 10, SPK_CHANNEL);
   ledcWriteTone(SPK_PIN, 0);
 #else
   ledcSetup(SPK_CHANNEL, ALARM_TONE_HZ, 10);
   ledcAttachPin(SPK_PIN, SPK_CHANNEL);
   ledcWriteTone(SPK_CHANNEL, 0);
+#endif
+
+#if SPK_TEST
+  Serial.println("Speaker test: 500 / 1000 / 2000 / 3000 Hz, 1 s each");
+  static const uint32_t TEST_HZ[4] = { 500, 1000, 2000, 3000 };
+  for (int i = 0; i < 4; i++) {
+    Serial.printf("  tone %lu Hz\n", (unsigned long)TEST_HZ[i]);
+    spk_tone(TEST_HZ[i]);
+    delay(1000);
+  }
+  spk_tone(0);
 #endif
 
 #if BOOT_BEEP
