@@ -17,7 +17,8 @@
         forever instead of hanging on a black screen
       - ambient auto-brightness from the CYD's LDR on GPIO 34; the slider
         sets the ceiling, darkness dims toward BL_AUTO_MIN_PCT of it
-      - analog face (lv_scale dial + line needles) with a compact info
+      - analog face (lv_scale dial + line needles, raised bezel with drop
+        shadow and needle shadows for depth) with a compact info
         column, and a monthly calendar face (holiday-aware, today
         highlighted); swipe left/right to cycle faces, choice kept in NVS
       - stopwatch and countdown-timer faces; the timer rings the CYD's
@@ -304,6 +305,20 @@ static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "�
 #define ANALOG_MIN_LEN    68
 #define ANALOG_SEC_LEN    78
 
+// Raised look: a bezel ring lit from the top (light -> dark vertical
+// gradient) with a soft drop shadow toward the bottom-right, a face with
+// the opposite gradient so it reads as slightly inset below the rim, and
+// offset shadow copies of the needles and cap. Radial gradients are not
+// enabled in this LVGL build, so everything is linear + shadow.
+#define ANALOG_BEZEL_W        7    // ring width beyond the dial radius
+#define ANALOG_SHADOW_W       22   // drop shadow blur
+#define ANALOG_SHADOW_OFS_X   4
+#define ANALOG_SHADOW_OFS_Y   8
+#define ANALOG_SHADOW_OPA     LV_OPA_50
+#define NEEDLE_SHADOW_OFS_X   3
+#define NEEDLE_SHADOW_OFS_Y   4
+#define NEEDLE_SHADOW_OPA     LV_OPA_40
+
 // ======================= Background themes ================================
 // A row of swatches on the brightness panel picks the background color; the
 // choice is stored in NVS. Ink that must adapt to stay readable (dial ticks
@@ -431,9 +446,15 @@ static uint32_t   tm_last_ms = 0;     // millis() of the previous countdown tick
 static bool       alarm_on = false;
 static uint32_t   alarm_t0 = 0;
 static lv_obj_t * a_scale;
+static lv_obj_t * a_bezel;            // raised rim behind the dial
+static lv_obj_t * a_face;             // dial face inside the rim
+static lv_obj_t * a_cap;              // center cap over the pivots
 static lv_obj_t * a_needle_h;
 static lv_obj_t * a_needle_m;
 static lv_obj_t * a_needle_s;
+static lv_obj_t * a_needle_h_sh;      // shadow copies, drawn under the needles
+static lv_obj_t * a_needle_m_sh;
+static lv_obj_t * a_needle_s_sh;
 static lv_obj_t * label_a_ampm;
 static lv_obj_t * label_a_wd;
 static lv_obj_t * label_a_date;       // "08-23"
@@ -660,6 +681,23 @@ static void theme_apply(void) {
     lv_obj_set_style_text_color(a_scale, lv_color_hex(th->dial_major), LV_PART_INDICATOR);
     lv_obj_set_style_line_color(a_needle_h, lv_color_hex(th->needle_hm), 0);
     lv_obj_set_style_line_color(a_needle_m, lv_color_hex(th->needle_hm), 0);
+
+    // Bezel and face tones are derived from the background so the disc
+    // looks like the same material as the panel, just raised. Light themes
+    // get a face a touch brighter than the background; dark themes a touch
+    // lighter too, since the rim's highlight needs something to sit on.
+    lv_color_t bg = lv_color_hex(th->bg);
+    bool dark = theme_is_dark();
+    lv_color_t rim_hi = lv_color_lighten(bg, dark ? 90 : 60);
+    lv_color_t rim_lo = lv_color_darken(bg,  dark ? 40 : 90);
+    lv_color_t face_c = dark ? lv_color_lighten(bg, 22) : lv_color_lighten(bg, 40);
+    lv_obj_set_style_bg_color(a_bezel, rim_hi, 0);
+    lv_obj_set_style_bg_grad_color(a_bezel, rim_lo, 0);
+    // Face: slightly shaded at the top under the rim, lighter toward the
+    // bottom - the inverse of the rim, which is what sells the inset.
+    lv_obj_set_style_bg_color(a_face, lv_color_darken(face_c, dark ? 20 : 12), 0);
+    lv_obj_set_style_bg_grad_color(a_face, lv_color_lighten(face_c, dark ? 10 : 20), 0);
+    lv_obj_set_style_shadow_color(a_bezel, lv_color_black(), 0);
   }
   cal_refresh_now();   // calendar ink is theme-dependent
 }
@@ -1005,12 +1043,17 @@ static void timer_cb(lv_timer_t * timer) {
     // Needles share the 0..3600 value space (one unit per second): the
     // minute needle creeps with the seconds, the hour needle advances once
     // per minute. Updated even while hidden so a face switch is never stale.
-    lv_scale_set_line_needle_value(a_scale, a_needle_s, ANALOG_SEC_LEN,
-                                   t.tm_sec * 60);
-    lv_scale_set_line_needle_value(a_scale, a_needle_m, ANALOG_MIN_LEN,
-                                   t.tm_min * 60 + t.tm_sec);
-    lv_scale_set_line_needle_value(a_scale, a_needle_h, ANALOG_HOUR_LEN,
-                                   (t.tm_hour % 12) * 300 + t.tm_min * 5);
+    int32_t v_s = t.tm_sec * 60;
+    int32_t v_m = t.tm_min * 60 + t.tm_sec;
+    int32_t v_h = (t.tm_hour % 12) * 300 + t.tm_min * 5;
+    lv_scale_set_line_needle_value(a_scale, a_needle_s, ANALOG_SEC_LEN, v_s);
+    lv_scale_set_line_needle_value(a_scale, a_needle_m, ANALOG_MIN_LEN, v_m);
+    lv_scale_set_line_needle_value(a_scale, a_needle_h, ANALOG_HOUR_LEN, v_h);
+    // Shadow copies follow the same values; their style translate offsets
+    // them down-right, matching the dial's light direction.
+    lv_scale_set_line_needle_value(a_scale, a_needle_s_sh, ANALOG_SEC_LEN, v_s);
+    lv_scale_set_line_needle_value(a_scale, a_needle_m_sh, ANALOG_MIN_LEN, v_m);
+    lv_scale_set_line_needle_value(a_scale, a_needle_h_sh, ANALOG_HOUR_LEN, v_h);
   }
 
   if (t.tm_min != last_min || time_fmt_dirty) {
@@ -1253,6 +1296,32 @@ static void create_analog_face(void) {
   face_analog = make_box(lv_screen_active());
   lv_obj_set_size(face_analog, lv_pct(100), lv_pct(100));
 
+  // ---- Raised disc under the dial: bezel ring (with the drop shadow) and
+  // the face inside it. Created before the scale so they draw beneath it.
+  // Colors come from theme_apply().
+  const int32_t bezel_size = ANALOG_DIAL_SIZE + 2 * ANALOG_BEZEL_W;
+  a_bezel = lv_obj_create(face_analog);
+  lv_obj_remove_style_all(a_bezel);
+  lv_obj_remove_flag(a_bezel, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_size(a_bezel, bezel_size, bezel_size);
+  lv_obj_align(a_bezel, LV_ALIGN_LEFT_MID, 8 - ANALOG_BEZEL_W, 0);
+  lv_obj_set_style_radius(a_bezel, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(a_bezel, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_grad_dir(a_bezel, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_shadow_width(a_bezel, ANALOG_SHADOW_W, 0);
+  lv_obj_set_style_shadow_offset_x(a_bezel, ANALOG_SHADOW_OFS_X, 0);
+  lv_obj_set_style_shadow_offset_y(a_bezel, ANALOG_SHADOW_OFS_Y, 0);
+  lv_obj_set_style_shadow_opa(a_bezel, ANALOG_SHADOW_OPA, 0);
+
+  a_face = lv_obj_create(face_analog);
+  lv_obj_remove_style_all(a_face);
+  lv_obj_remove_flag(a_face, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_size(a_face, ANALOG_DIAL_SIZE, ANALOG_DIAL_SIZE);
+  lv_obj_align(a_face, LV_ALIGN_LEFT_MID, 8, 0);
+  lv_obj_set_style_radius(a_face, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_opa(a_face, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_grad_dir(a_face, LV_GRAD_DIR_VER, 0);
+
   // ---- Dial: a round lv_scale with 60 minute ticks, hour numerals on the
   // majors. Rotation 270 puts value 0 at 12 o'clock. The value space is
   // 0..3600 (one unit per second) rather than 0..60, so the minute and hour
@@ -1282,7 +1351,24 @@ static void create_analog_face(void) {
   lv_obj_set_style_length(a_scale, 9, LV_PART_INDICATOR);
   lv_obj_set_style_text_font(a_scale, &lv_font_montserrat_20, LV_PART_INDICATOR);
 
-  // ---- Needles (children of the scale; lv_scale positions the points)
+  // ---- Needles (children of the scale; lv_scale positions the points).
+  // Shadow copies are created first so they draw under the real needles;
+  // lv_scale aligns each line to the scale's origin, so a style translate
+  // shifts the whole shadow down-right.
+  struct { lv_obj_t ** sh; int32_t w; } needle_sh[3] = {
+    { &a_needle_h_sh, 5 }, { &a_needle_m_sh, 3 }, { &a_needle_s_sh, 2 },
+  };
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t * l = lv_line_create(a_scale);
+    lv_obj_set_style_line_width(l, needle_sh[i].w, 0);
+    lv_obj_set_style_line_rounded(l, true, 0);
+    lv_obj_set_style_line_color(l, lv_color_black(), 0);
+    lv_obj_set_style_line_opa(l, NEEDLE_SHADOW_OPA, 0);
+    lv_obj_set_style_translate_x(l, NEEDLE_SHADOW_OFS_X, 0);
+    lv_obj_set_style_translate_y(l, NEEDLE_SHADOW_OFS_Y, 0);
+    *needle_sh[i].sh = l;
+  }
+
   a_needle_h = lv_line_create(a_scale);
   lv_obj_set_style_line_width(a_needle_h, 5, 0);
   lv_obj_set_style_line_rounded(a_needle_h, true, 0);
@@ -1295,15 +1381,23 @@ static void create_analog_face(void) {
   lv_obj_set_style_line_width(a_needle_s, 2, 0);
   lv_obj_set_style_line_color(a_needle_s, lv_color_hex(0xFF3300), 0);
 
-  // Center cap over the needle pivots
-  lv_obj_t * cap = lv_obj_create(a_scale);
-  lv_obj_remove_style_all(cap);
-  lv_obj_remove_flag(cap, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_set_size(cap, 12, 12);
-  lv_obj_set_style_radius(cap, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(cap, lv_color_hex(0xFF3300), 0);
-  lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
-  lv_obj_center(cap);
+  // Center cap over the needle pivots: lit from the top, with its own
+  // small shadow so it sits proud of the needles.
+  a_cap = lv_obj_create(a_scale);
+  lv_obj_remove_style_all(a_cap);
+  lv_obj_remove_flag(a_cap, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_size(a_cap, 14, 14);
+  lv_obj_set_style_radius(a_cap, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(a_cap, lv_color_hex(0xFF7A55), 0);
+  lv_obj_set_style_bg_grad_color(a_cap, lv_color_hex(0xC42600), 0);
+  lv_obj_set_style_bg_grad_dir(a_cap, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_bg_opa(a_cap, LV_OPA_COVER, 0);
+  lv_obj_set_style_shadow_width(a_cap, 8, 0);
+  lv_obj_set_style_shadow_offset_x(a_cap, 2, 0);
+  lv_obj_set_style_shadow_offset_y(a_cap, 3, 0);
+  lv_obj_set_style_shadow_opa(a_cap, LV_OPA_50, 0);
+  lv_obj_set_style_shadow_color(a_cap, lv_color_black(), 0);
+  lv_obj_center(a_cap);
 
   // ---- Info column on the right (~116 px wide)
   static lv_style_t style_a_kr;
