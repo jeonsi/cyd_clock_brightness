@@ -17,6 +17,8 @@
         forever instead of hanging on a black screen
       - ambient auto-brightness from the CYD's LDR on GPIO 34; the slider
         sets the ceiling, darkness dims toward BL_AUTO_MIN_PCT of it
+      - analog face (lv_scale dial + line needles) with a compact info
+        column; swipe left/right to switch faces, choice kept in NVS
       - every field has a fixed width so nothing shifts when the digits change
       - touch the screen to bring up a backlight brightness slider
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
@@ -188,6 +190,18 @@ static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "�
 #define EVENT_FESTIVAL_COLOR  lv_color_hex(0x33CC66)  // 정월대보름, 단오, 칠석
 #define TERM_TODAY_COLOR      lv_color_hex(0x33CC66)  // 절기 당일 강조
 
+// ======================= Analog face ======================================
+// Swipe left/right anywhere on the clock to switch between the digital and
+// analog faces; the choice is stored in NVS. A tap still opens the
+// brightness slider.
+#define ANALOG_DIAL_SIZE  188
+#define ANALOG_HOUR_LEN   48
+#define ANALOG_MIN_LEN    68
+#define ANALOG_SEC_LEN    78
+#define NEEDLE_HM_COLOR   lv_color_hex(0x333333)
+#define DIAL_MAJOR_COLOR  lv_color_hex(0x444444)
+#define DIAL_MINOR_COLOR  lv_color_hex(0xBBBBBB)
+
 static lv_obj_t * label_ampm;
 static lv_obj_t * label_hm;
 static lv_obj_t * label_sec;
@@ -197,6 +211,24 @@ static lv_obj_t * label_lunar_event; // holiday / festival name
 static lv_obj_t * label_lunar_pre;   // "음" / "음 윤"
 static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
 static lv_obj_t * label_lunar_term;  // current solar term
+
+// The two faces are full-screen sibling containers; exactly one is visible.
+static lv_obj_t * face_digital;
+static lv_obj_t * face_analog;
+static lv_obj_t * a_scale;
+static lv_obj_t * a_needle_h;
+static lv_obj_t * a_needle_m;
+static lv_obj_t * a_needle_s;
+static lv_obj_t * label_a_ampm;
+static lv_obj_t * label_a_wd;
+static lv_obj_t * label_a_date;       // "08-23"
+static lv_obj_t * label_a_lunar_pre;  // "음" / "음 윤"
+static lv_obj_t * label_a_lunar_num;  // "7.11" in DSEG
+static lv_obj_t * label_a_term;
+static lv_obj_t * label_a_event;
+
+static int      face_mode = 0;        // 0 = digital, 1 = analog (kept in NVS)
+static uint32_t last_gesture_ms = 0;
 
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
 static boot_state_t boot_state = BOOT_WIFI;
@@ -326,9 +358,35 @@ static void bl_slider_cb(lv_event_t * e) {
   bl_last_touch_ms = millis();
 }
 
-// Any press anywhere on the clock face opens the panel
-static void screen_press_cb(lv_event_t * e) {
+static void face_apply(void) {
+  if (face_mode == 0) {
+    lv_obj_remove_flag(face_digital, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(face_analog, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(face_digital, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(face_analog, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+// Swipe left/right anywhere on the clock switches the face. The brightness
+// panel lives on the top layer, so its slider drags never bubble here.
+static void screen_gesture_cb(lv_event_t * e) {
   LV_UNUSED(e);
+  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
+  if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
+    last_gesture_ms = millis();
+    face_mode = !face_mode;
+    face_apply();
+    prefs.putInt("face", face_mode);
+  }
+}
+
+// A tap anywhere on the clock face opens the panel. CLICKED also fires at
+// the end of a swipe (the screen is not scrollable, so moving does not
+// suppress it) - the gesture timestamp filters those out.
+static void screen_click_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
   bl_panel_show();
 }
 
@@ -450,6 +508,13 @@ static void timer_cb(lv_timer_t * timer) {
     char buf[8];
     strftime(buf, sizeof(buf), "%S", &t);
     lv_label_set_text(label_sec, buf);
+
+    // Needles share the 0..60 value space; the hour needle creeps with the
+    // minutes. Updated even while hidden so a face switch is never stale.
+    lv_scale_set_line_needle_value(a_scale, a_needle_s, ANALOG_SEC_LEN, t.tm_sec);
+    lv_scale_set_line_needle_value(a_scale, a_needle_m, ANALOG_MIN_LEN, t.tm_min);
+    lv_scale_set_line_needle_value(a_scale, a_needle_h, ANALOG_HOUR_LEN,
+                                   (t.tm_hour % 12) * 5 + t.tm_min / 12);
   }
 
   if (t.tm_min != last_min) {
@@ -464,6 +529,7 @@ static void timer_cb(lv_timer_t * timer) {
     char ampm[4];
     strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
     lv_label_set_text(label_ampm, ampm);
+    lv_label_set_text(label_a_ampm, ampm);
   }
 
   if (t.tm_mday != last_mday) {
@@ -474,8 +540,13 @@ static void timer_cb(lv_timer_t * timer) {
     lv_label_set_text(label_datenum, buf);
     snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[t.tm_wday]);
     lv_label_set_text(label_wd, buf);
-    lv_obj_set_style_text_color(label_wd,
-        kr_is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL, 0);
+    lv_label_set_text(label_a_wd, buf);
+    lv_color_t wdc = kr_is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL;
+    lv_obj_set_style_text_color(label_wd, wdc, 0);
+    lv_obj_set_style_text_color(label_a_wd, wdc, 0);
+
+    snprintf(buf, sizeof(buf), "%02d-%02d", t.tm_mon + 1, t.tm_mday);
+    lv_label_set_text(label_a_date, buf);
 
     // Bottom line: [holiday/festival name] 음 7.11  입추.
     // Hidden labels are skipped by the flex row, so empty parts leave no gap.
@@ -497,31 +568,46 @@ static void timer_cb(lv_timer_t * timer) {
       lv_label_set_text(label_lunar_event, ev);
       lv_obj_set_style_text_color(label_lunar_event, evc, 0);
       lv_obj_remove_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(label_a_event, ev);
+      lv_obj_set_style_text_color(label_a_event, evc, 0);
+      lv_obj_remove_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (have_lunar) {
       char nbuf[12];
-      lv_label_set_text(label_lunar_pre, ld.leap ? "음 윤" : "음");
+      const char * pre = ld.leap ? "음 윤" : "음";
       snprintf(nbuf, sizeof(nbuf), "%d.%d", ld.month, ld.day);
+      lv_label_set_text(label_lunar_pre, pre);
       lv_label_set_text(label_lunar_num, nbuf);
+      lv_label_set_text(label_a_lunar_pre, pre);
+      lv_label_set_text(label_a_lunar_num, nbuf);
       lv_obj_remove_flag(label_lunar_pre, LV_OBJ_FLAG_HIDDEN);
       lv_obj_remove_flag(label_lunar_num, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(label_a_lunar_pre, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(label_a_lunar_num, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_pre, LV_OBJ_FLAG_HIDDEN);
       lv_obj_add_flag(label_lunar_num, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(label_a_lunar_pre, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(label_a_lunar_num, LV_OBJ_FLAG_HIDDEN);
     }
 
     bool term_today = false;
     const char * term = kst_current_term(&t, &term_today);
     if (term) {
+      lv_color_t tc = term_today ? TERM_TODAY_COLOR : LUNAR_COLOR;
       lv_label_set_text(label_lunar_term, term);
-      lv_obj_set_style_text_color(label_lunar_term,
-          term_today ? TERM_TODAY_COLOR : LUNAR_COLOR, 0);
+      lv_obj_set_style_text_color(label_lunar_term, tc, 0);
       lv_obj_remove_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(label_a_term, term);
+      lv_obj_set_style_text_color(label_a_term, tc, 0);
+      lv_obj_remove_flag(label_a_term, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(label_a_term, LV_OBJ_FLAG_HIDDEN);
     }
   }
 
@@ -574,13 +660,139 @@ static void create_brightness_panel(void) {
   lv_obj_add_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ============ Analog face: [ dial ][ AM (일) / 08-23 / 음 7.11 / 입추 ] ====
+static void create_analog_face(void) {
+  face_analog = make_box(lv_screen_active());
+  lv_obj_set_size(face_analog, lv_pct(100), lv_pct(100));
+
+  // ---- Dial: a round lv_scale with 60 minute ticks, hour numerals on the
+  // majors. Rotation 270 puts value 0 at 12 o'clock; range 0..60 lets all
+  // three needles share one value space (hour mapped to h*5 + min/12).
+  a_scale = lv_scale_create(face_analog);
+  lv_obj_set_size(a_scale, ANALOG_DIAL_SIZE, ANALOG_DIAL_SIZE);
+  lv_obj_align(a_scale, LV_ALIGN_LEFT_MID, 8, 0);
+  lv_scale_set_mode(a_scale, LV_SCALE_MODE_ROUND_INNER);
+  lv_scale_set_range(a_scale, 0, 60);
+  lv_scale_set_angle_range(a_scale, 360);
+  lv_scale_set_rotation(a_scale, 270);
+  lv_scale_set_total_tick_count(a_scale, 61);
+  lv_scale_set_major_tick_every(a_scale, 5);
+  static const char * hour_txts[] = {"12", "1", "2", "3", "4", "5", "6",
+                                     "7", "8", "9", "10", "11", NULL};
+  lv_scale_set_text_src(a_scale, hour_txts);
+  lv_scale_set_label_show(a_scale, true);
+
+  lv_obj_set_style_arc_width(a_scale, 0, LV_PART_MAIN);
+  lv_obj_set_style_line_width(a_scale, 1, LV_PART_ITEMS);
+  lv_obj_set_style_length(a_scale, 5, LV_PART_ITEMS);
+  lv_obj_set_style_line_color(a_scale, DIAL_MINOR_COLOR, LV_PART_ITEMS);
+  lv_obj_set_style_line_width(a_scale, 3, LV_PART_INDICATOR);
+  lv_obj_set_style_length(a_scale, 9, LV_PART_INDICATOR);
+  lv_obj_set_style_line_color(a_scale, DIAL_MAJOR_COLOR, LV_PART_INDICATOR);
+  lv_obj_set_style_text_font(a_scale, &lv_font_montserrat_20, LV_PART_INDICATOR);
+  lv_obj_set_style_text_color(a_scale, DIAL_MAJOR_COLOR, LV_PART_INDICATOR);
+
+  // ---- Needles (children of the scale; lv_scale positions the points)
+  a_needle_h = lv_line_create(a_scale);
+  lv_obj_set_style_line_width(a_needle_h, 5, 0);
+  lv_obj_set_style_line_color(a_needle_h, NEEDLE_HM_COLOR, 0);
+  lv_obj_set_style_line_rounded(a_needle_h, true, 0);
+
+  a_needle_m = lv_line_create(a_scale);
+  lv_obj_set_style_line_width(a_needle_m, 3, 0);
+  lv_obj_set_style_line_color(a_needle_m, NEEDLE_HM_COLOR, 0);
+  lv_obj_set_style_line_rounded(a_needle_m, true, 0);
+
+  a_needle_s = lv_line_create(a_scale);
+  lv_obj_set_style_line_width(a_needle_s, 2, 0);
+  lv_obj_set_style_line_color(a_needle_s, lv_color_hex(0xFF3300), 0);
+
+  // Center cap over the needle pivots
+  lv_obj_t * cap = lv_obj_create(a_scale);
+  lv_obj_remove_style_all(cap);
+  lv_obj_remove_flag(cap, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_size(cap, 12, 12);
+  lv_obj_set_style_radius(cap, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(cap, lv_color_hex(0xFF3300), 0);
+  lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
+  lv_obj_center(cap);
+
+  // ---- Info column on the right (~116 px wide)
+  static lv_style_t style_a_kr;
+  lv_style_init(&style_a_kr);
+  lv_style_set_text_font(&style_a_kr, FONT_LUNAR);
+
+  lv_obj_t * col = make_box(face_analog);
+  lv_obj_set_size(col, 116, LV_SIZE_CONTENT);
+  lv_obj_align(col, LV_ALIGN_RIGHT_MID, -2, 0);
+  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_row(col, 6, 0);
+
+  // [ AM ][ (일) ]
+  lv_obj_t * wdrow = make_box(col);
+  lv_obj_set_size(wdrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(wdrow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(wdrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(wdrow, 6, 0);
+
+  label_a_ampm = lv_label_create(wdrow);
+  lv_label_set_text(label_a_ampm, "AM");
+  lv_obj_set_style_text_font(label_a_ampm, FONT_AMPM, 0);
+
+  label_a_wd = lv_label_create(wdrow);
+  lv_label_set_text(label_a_wd, "(일)");
+  lv_obj_set_style_text_font(label_a_wd, FONT_KR, 0);
+  lv_obj_set_style_text_color(label_a_wd, WEEKDAY_COLOR_NORMAL, 0);
+
+  label_a_date = lv_label_create(col);
+  lv_label_set_text(label_a_date, "01-01");
+  lv_obj_set_style_text_font(label_a_date, FONT_DATENUM, 0);
+
+  // [ 음 ][ 7.11 ]
+  lv_obj_t * lrow = make_box(col);
+  lv_obj_set_size(lrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(lrow, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(lrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(lrow, 4, 0);
+  lv_obj_set_style_text_color(lrow, LUNAR_COLOR, 0);
+
+  label_a_lunar_pre = lv_label_create(lrow);
+  lv_label_set_text(label_a_lunar_pre, "");
+  lv_obj_add_style(label_a_lunar_pre, &style_a_kr, 0);
+  lv_obj_set_style_translate_y(label_a_lunar_pre, 3, 0);
+
+  label_a_lunar_num = lv_label_create(lrow);
+  lv_label_set_text(label_a_lunar_num, "");
+  lv_obj_set_style_text_font(label_a_lunar_num, FONT_LUNAR_NUM, 0);
+
+  label_a_term = lv_label_create(col);
+  lv_label_set_text(label_a_term, "");
+  lv_obj_add_style(label_a_term, &style_a_kr, 0);
+  lv_obj_set_style_text_color(label_a_term, LUNAR_COLOR, 0);
+  lv_obj_add_flag(label_a_term, LV_OBJ_FLAG_HIDDEN);
+
+  label_a_event = lv_label_create(col);
+  lv_label_set_text(label_a_event, "");
+  lv_obj_add_style(label_a_event, &style_a_kr, 0);
+  lv_obj_set_width(label_a_event, 116);          // long names wrap
+  lv_obj_set_style_text_align(label_a_event, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
+}
+
 void lv_create_main_gui(void) {
 
   // 검은 배경 + 주황 세그먼트
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(0xFF3300), 0);
-  lv_obj_add_event_cb(lv_screen_active(), screen_press_cb, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(lv_screen_active(), screen_click_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(lv_screen_active(), screen_gesture_cb, LV_EVENT_GESTURE, NULL);
+
+  // Everything of the digital face hangs off this container so one flag
+  // flip swaps the whole face.
+  face_digital = make_box(lv_screen_active());
+  lv_obj_set_size(face_digital, lv_pct(100), lv_pct(100));
 
   // ---- Styles
   static lv_style_t style_time;
@@ -636,7 +848,7 @@ void lv_create_main_gui(void) {
                 (long)(w_hm + w_col + 8), SCREEN_HEIGHT);
 
   // ================= Date row: [ 2026-08-21 ][ (금) ] =================
-  lv_obj_t * date_row = make_box(lv_screen_active());
+  lv_obj_t * date_row = make_box(face_digital);
   lv_obj_set_size(date_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   // Row offsets place the whole block (date / time / lunar line) with equal
   // top and bottom margins: content spans y 28..212 on the 240 px panel,
@@ -663,7 +875,7 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_translate_y(label_wd, WEEKDAY_BASELINE_NUDGE, 0);
 
   // ================= Time row: [ HH:MM ][ AM/PM over SS ] =================
-  lv_obj_t * time_row = make_box(lv_screen_active());
+  lv_obj_t * time_row = make_box(face_digital);
   lv_obj_set_size(time_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   lv_obj_align(time_row, LV_ALIGN_CENTER, 0, -1);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
@@ -729,7 +941,7 @@ void lv_create_main_gui(void) {
   lv_style_init(&style_lunar_num);
   lv_style_set_text_font(&style_lunar_num, FONT_LUNAR_NUM);
 
-  lv_obj_t * lunar_row = make_box(lv_screen_active());
+  lv_obj_t * lunar_row = make_box(face_digital);
   lv_obj_set_size(lunar_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   lv_obj_align(lunar_row, LV_ALIGN_BOTTOM_MID, 0, -28);
   lv_obj_set_flex_flow(lunar_row, LV_FLEX_FLOW_ROW);
@@ -758,6 +970,9 @@ void lv_create_main_gui(void) {
   lv_obj_add_style(label_lunar_term, &style_lunar, 0);
   lv_obj_set_style_translate_y(label_lunar_term, 3, 0);
   lv_obj_set_style_pad_left(label_lunar_term, 6, 0);
+
+  create_analog_face();
+  face_apply();         // show the face restored from NVS
 
   create_brightness_panel();
   bl_set_pct(bl_pct);   // syncs the label with the restored value
@@ -843,6 +1058,7 @@ void setup() {
   prefs.begin("clock", false);
   bl_pct = prefs.getInt("bl", BL_DEFAULT);
   bl_saved_pct = bl_pct;
+  face_mode = prefs.getInt("face", 0);
 
   // Touch controller on its own SPI bus
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
