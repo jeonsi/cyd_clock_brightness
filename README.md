@@ -134,6 +134,8 @@ Arduino IDE 기준:
 
 ## 라이선스
 
-- DSEG © Keshikan — SIL Open Font License 1.1
-- NanumGothic © NAVER — SIL Open Font License 1.1
+- 프로젝트 코드: [MIT License](LICENSE)
+- 번들 폰트: SIL Open Font License 1.1 — 전문과 저작권 고지는 [OFL.txt](OFL.txt) 참고
+  - DSEG © keshikan
+  - NanumGothic © NAVER
 - 원본 예제: Rui Santos & Sara Santos, [Random Nerd Tutorials](https://RandomNerdTutorials.com/)
