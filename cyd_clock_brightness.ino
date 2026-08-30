@@ -227,8 +227,13 @@ static int16_t xpt_median_avg(int16_t * v, int n) {
 
 // One touch frame: returns the pressure z; fills *rx/*ry (only when z is at
 // least TOUCH_Z_RELEASE) with coordinates in the same raw space the
-// XPT2046_Touchscreen library produced at rotation 0 (raw_x = 4095 - Y ADC,
-// raw_y = X ADC), so the TOUCH_RAW_* calibration keeps its meaning.
+// XPT2046_Touchscreen library produced at rotation 0, so the TOUCH_RAW_*
+// calibration keeps its meaning: raw_x = 4095 - conv(0xD1), raw_y =
+// conv(0x91). Careful when comparing with the library source: it pipelines
+// commands through transfer16(), so each of its reads returns the result of
+// the PREVIOUS command - its "0xD1" data slots actually hold 0x91
+// conversions and vice versa. The conversions here are not pipelined
+// (command then two data bytes), so command and result correspond directly.
 static int xpt_frame(int32_t * rx, int32_t * ry) {
   touchscreenSPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
   digitalWrite(XPT2046_CS, LOW);
@@ -243,8 +248,8 @@ static int xpt_frame(int32_t * rx, int32_t * ry) {
     for (int i = 0; i < TOUCH_SAMPLES; i++) xs[i] = (int16_t)xpt_conv(0xD1);
     xpt_conv(0x91);                   // same for Y
     for (int i = 0; i < TOUCH_SAMPLES; i++) ys[i] = (int16_t)xpt_conv(0x91);
-    *rx = 4095 - xpt_median_avg(ys, TOUCH_SAMPLES);
-    *ry = xpt_median_avg(xs, TOUCH_SAMPLES);
+    *rx = 4095 - xpt_median_avg(xs, TOUCH_SAMPLES);
+    *ry = xpt_median_avg(ys, TOUCH_SAMPLES);
   }
 
   xpt_conv(0x90);                     // PD=00: power down between frames
