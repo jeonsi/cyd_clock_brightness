@@ -628,15 +628,14 @@ static void timer_cb(lv_timer_t * timer) {
     lv_label_set_text(label_sec, buf);
 
     // Needles share the 0..3600 value space (one unit per second): the
-    // minute needle creeps with the seconds and the hour needle with the
-    // minutes, like real clockwork instead of once-a-minute jumps.
-    // Updated even while hidden so a face switch is never stale.
+    // minute needle creeps with the seconds, the hour needle advances once
+    // per minute. Updated even while hidden so a face switch is never stale.
     lv_scale_set_line_needle_value(a_scale, a_needle_s, ANALOG_SEC_LEN,
                                    t.tm_sec * 60);
     lv_scale_set_line_needle_value(a_scale, a_needle_m, ANALOG_MIN_LEN,
                                    t.tm_min * 60 + t.tm_sec);
     lv_scale_set_line_needle_value(a_scale, a_needle_h, ANALOG_HOUR_LEN,
-                                   (t.tm_hour % 12) * 300 + t.tm_min * 5 + t.tm_sec / 12);
+                                   (t.tm_hour % 12) * 300 + t.tm_min * 5);
   }
 
   if (t.tm_min != last_min) {
