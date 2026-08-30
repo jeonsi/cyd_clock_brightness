@@ -22,6 +22,7 @@
         highlighted); swipe left/right to cycle faces, choice kept in NVS
       - stopwatch and countdown-timer faces; the timer rings the CYD's
         speaker (GPIO 26) and flashes the screen until tapped
+      - 12 / 24-hour format toggle on the brightness panel, kept in NVS
       - background color selectable from swatches on the brightness panel
         (white / ivory / dark gray / black, THEMES table, kept in NVS)
       - every field has a fixed width so nothing shifts when the digits change
@@ -346,6 +347,12 @@ static lv_obj_t * label_hm;
 static lv_obj_t * label_sec;
 static lv_obj_t * label_datenum;
 static lv_obj_t * label_wd;
+static lv_obj_t * hm_box;            // HH:MM cell, resized on the 12/24 h toggle
+static lv_obj_t * label_ghost;       // ghost "88:88" (SHOW_GHOST_SEGMENTS) or NULL
+static lv_obj_t * lbl_h24;           // "12H" / "24H" on the brightness panel
+static bool       h24 = false;       // 24-hour format (kept in NVS)
+static bool       time_fmt_dirty = false;
+static int32_t    w_hm_12 = 0, w_hm_24 = 0;
 static lv_obj_t * label_lunar_event; // holiday / festival name
 static lv_obj_t * label_lunar_pre;   // "음" / "음 윤"
 static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
@@ -1006,13 +1013,15 @@ static void timer_cb(lv_timer_t * timer) {
                                    (t.tm_hour % 12) * 300 + t.tm_min * 5);
   }
 
-  if (t.tm_min != last_min) {
-    bool first_update = (last_min == -1);   // GUI just built: don't chime
+  if (t.tm_min != last_min || time_fmt_dirty) {
+    bool first_update   = (last_min == -1);   // GUI just built: don't chime
+    bool minute_changed = (t.tm_min != last_min);
     last_min = t.tm_min;
+    time_fmt_dirty = false;
     char buf[8];
 
 #if HOURLY_CHIME
-    if (!first_update && t.tm_min == 0 && !alarm_on &&
+    if (!first_update && minute_changed && t.tm_min == 0 && !alarm_on &&
         t.tm_hour >= CHIME_FROM_HOUR && t.tm_hour <= CHIME_TO_HOUR) {
       // Casio-style pip-pip
       spk_tone(CHIME_TONE_HZ);
@@ -1025,15 +1034,25 @@ static void timer_cb(lv_timer_t * timer) {
     }
 #endif
 
-    int h12 = t.tm_hour % 12;
-    if (h12 == 0) h12 = 12;
-    snprintf(buf, sizeof(buf), "%d:%02d", h12, t.tm_min);
-    lv_label_set_text(label_hm, buf);
+    if (h24) {
+      snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
+      lv_label_set_text(label_hm, buf);
+      // Empty (not hidden) on the digital face so the seconds keep their
+      // bottom slot in the SPACE_BETWEEN column; hidden on the analog row.
+      lv_label_set_text(label_ampm, "");
+      lv_obj_add_flag(label_a_ampm, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      int h12 = t.tm_hour % 12;
+      if (h12 == 0) h12 = 12;
+      snprintf(buf, sizeof(buf), "%d:%02d", h12, t.tm_min);
+      lv_label_set_text(label_hm, buf);
 
-    char ampm[4];
-    strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
-    lv_label_set_text(label_ampm, ampm);
-    lv_label_set_text(label_a_ampm, ampm);
+      char ampm[4];
+      strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
+      lv_label_set_text(label_ampm, ampm);
+      lv_label_set_text(label_a_ampm, ampm);
+      lv_obj_remove_flag(label_a_ampm, LV_OBJ_FLAG_HIDDEN);
+    }
   }
 
   if (t.tm_mday != last_mday) {
@@ -1128,6 +1147,29 @@ static void timer_cb(lv_timer_t * timer) {
   }
 }
 
+static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
+                              lv_event_cb_t cb, void * user_data,
+                              int32_t w, int32_t h);
+
+// ---- 12 / 24 hour toggle on the brightness panel ---------------------------
+static void time_fmt_apply(void) {
+  int32_t w = h24 ? w_hm_24 : w_hm_12;
+  lv_obj_set_width(hm_box, w);
+  lv_obj_set_width(label_hm, w);
+  if (label_ghost) lv_obj_set_width(label_ghost, w);
+  if (lbl_h24) lv_label_set_text(lbl_h24, h24 ? "24H" : "12H");
+  time_fmt_dirty = true;   // timer_cb re-renders the hour on its next tick
+}
+
+static void h24_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  h24 = !h24;
+  prefs.putInt("h24", h24 ? 1 : 0);
+  time_fmt_apply();
+  bl_last_touch_ms = millis();
+}
+
 // ---- Theme swatches on the brightness panel -------------------------------
 static void theme_btn_refresh(void) {
   for (int i = 0; i < THEME_COUNT; i++) {
@@ -1166,6 +1208,11 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_text_font(bl_pct_label, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(bl_pct_label, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(bl_pct_label, LV_ALIGN_TOP_LEFT, 0, -2);
+
+  // 12/24-hour toggle, top-right (the swatch rows start below it)
+  lv_obj_t * hb = make_button(bl_panel, h24 ? "24H" : "12H", h24_btn_cb, NULL, 64, 26);
+  lv_obj_align(hb, LV_ALIGN_TOP_RIGHT, 0, -4);
+  lbl_h24 = lv_obj_get_child(hb, 0);
 
   // Background color swatches in two full-width rows below the % label
   // (light row, then dark row - mirroring the THEMES order); the current
@@ -1466,8 +1513,8 @@ void lv_create_main_gui(void) {
   // The bold face is wider than the regular one, and this picks that up
   // automatically - no constants to retune.
 
-  // The hour field never shows 2-9 in its leading cell: 12-hour time runs
-  // 1:00-12:59, so the leading digit is either absent or a '1', whose ink
+  // In 12-hour mode the hour field never shows 2-9 in its leading cell: it
+  // runs 1:00-12:59, so the leading digit is either absent or a '1', whose ink
   // (segments B and C) sits at the far right of its monospaced cell.
   // Reserve only that ink instead of the whole cell, otherwise a one-digit
   // hour leaves a dead zone on the left and the display looks pushed right.
@@ -1477,8 +1524,10 @@ void lv_create_main_gui(void) {
   int32_t lead_blank = 0;
   if (lv_font_get_glyph_dsc(FONT_TIME, &g1, '1', 0)) lead_blank = g1.ofs_x;
 
-  const int32_t w_hm    = 4 * max_digit_width(FONT_TIME) + glyph_width(FONT_TIME, ':') + 4
-                          - lead_blank;
+  // 24-hour mode shows a real leading 0/1/2 and needs the whole cell.
+  w_hm_24 = 4 * max_digit_width(FONT_TIME) + glyph_width(FONT_TIME, ':') + 4;
+  w_hm_12 = w_hm_24 - lead_blank;
+  const int32_t w_hm    = h24 ? w_hm_24 : w_hm_12;
   const int32_t w_sec   = 2 * max_digit_width(FONT_SEC) + 2;
   const int32_t w_ampm  = LV_MAX(text_width(FONT_AMPM, "AM"),
                                  text_width(FONT_AMPM, "PM")) + 2;
@@ -1490,8 +1539,8 @@ void lv_create_main_gui(void) {
 
   // Bold digits are wider, so the time row can outgrow the 320 px landscape
   // width. Shout about it on the serial monitor rather than silently clipping.
-  Serial.printf("time row width: %ld px (screen %d px)\n",
-                (long)(w_hm + w_col + 8), SCREEN_HEIGHT);
+  Serial.printf("time row width (24 h, worst case): %ld px (screen %d px)\n",
+                (long)(w_hm_24 + w_col + 8), SCREEN_HEIGHT);
 
   // ================= Date row: [ 2026-08-21 ][ (금) ] =================
   lv_obj_t * date_row = make_box(face_digital);
@@ -1529,14 +1578,14 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_pad_column(time_row, 8, 0);
 
   // HH:MM, with the unlit segments painted underneath
-  lv_obj_t * hm_box = make_box(time_row);
+  hm_box = make_box(time_row);
   lv_obj_set_size(hm_box, w_hm, h_time);
 
 #if SHOW_GHOST_SEGMENTS
   // Same width/align/clip as label_hm so the segments coincide. The blank
   // lead-in of the first 8 gets clipped like the '1' cell above; its left
   // segments (E/F) lose lead_blank pixels - acceptable for a ghost layer.
-  lv_obj_t * label_ghost = lv_label_create(hm_box);
+  label_ghost = lv_label_create(hm_box);
   lv_label_set_text(label_ghost, "88:88");
   lv_obj_add_style(label_ghost, &style_time, 0);
   lv_obj_set_style_text_color(label_ghost, GHOST_COLOR, 0);
@@ -1722,6 +1771,7 @@ void setup() {
   if (face_mode < 0 || face_mode >= FACE_COUNT) face_mode = 0;
   theme_idx = prefs.getInt("theme", 0);
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
+  h24 = prefs.getInt("h24", 0) != 0;
 
   // Touch controller on its own SPI bus, driven directly (see xpt_frame)
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
