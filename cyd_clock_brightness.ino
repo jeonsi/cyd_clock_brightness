@@ -20,6 +20,8 @@
       - analog face (lv_scale dial + line needles) with a compact info
         column, and a monthly calendar face (holiday-aware, today
         highlighted); swipe left/right to cycle faces, choice kept in NVS
+      - stopwatch and countdown-timer faces; the timer rings the CYD's
+        speaker (GPIO 26) and flashes the screen until tapped
       - background color selectable from swatches on the brightness panel
         (white / ivory / dark gray / black, THEMES table, kept in NVS)
       - every field has a fixed width so nothing shifts when the digits change
@@ -350,12 +352,24 @@ static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
 static lv_obj_t * label_lunar_term;  // current solar term
 
 // The faces are full-screen sibling containers; exactly one is visible.
-// Swiping left/right cycles digital -> analog -> calendar -> digital.
-// On the calendar face, swiping up/down browses to the next/previous
-// month; leaving the face snaps back to the current month.
-#define FACE_COUNT 3
+// Swiping left/right cycles digital -> analog -> calendar -> stopwatch ->
+// timer -> digital. On the calendar face, swiping up/down browses to the
+// next/previous month; leaving the face snaps back to the current month.
+#define FACE_COUNT 5
 #define FACE_CAL   2
+#define FACE_SW    3
+#define FACE_TM    4
 #define CAL_OFF_MAX 120   // browse limit, months away from today
+
+// ======================= Stopwatch / Timer ================================
+// Buttons use LVGL's built-in FontAwesome symbols (play/pause/refresh), so
+// no extra font glyphs are needed. The countdown timer rings the CYD's
+// speaker and flashes an overlay until tapped or TIMER_ALARM_MS passes.
+#define SPK_PIN         26
+#define SPK_CHANNEL     2                        // ESP32 Arduino core 2.x only
+#define TIMER_ALARM_MS  (30 * 1000)
+#define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
+#define ALARM_TONE_HZ   2000
 static lv_obj_t * face_digital;
 static lv_obj_t * face_analog;
 static lv_obj_t * face_cal;
@@ -363,6 +377,24 @@ static lv_obj_t * label_c_title;      // "2026.8"
 static lv_obj_t * label_c_wd[7];      // 일..토 header
 static lv_obj_t * label_c_day[42];    // 6 rows x 7 columns
 static int        cal_off = 0;        // viewed month, relative to current
+
+static lv_obj_t * face_sw;            // stopwatch
+static lv_obj_t * label_sw_time;      // "12:34"
+static lv_obj_t * label_sw_frac;      // ".7" tenths
+static lv_obj_t * lbl_sw_start;       // play/pause symbol on the start button
+static bool       sw_running = false;
+static uint32_t   sw_accum_ms = 0;    // accumulated while stopped
+static uint32_t   sw_t0 = 0;          // millis() at the last start
+
+static lv_obj_t * face_tm;            // countdown timer
+static lv_obj_t * label_tm_time;      // "05:00"
+static lv_obj_t * lbl_tm_start;
+static lv_obj_t * alarm_overlay;
+static bool       tm_running = false;
+static uint32_t   tm_left_ms = 0;
+static uint32_t   tm_last_ms = 0;     // millis() of the previous countdown tick
+static bool       alarm_on = false;
+static uint32_t   alarm_t0 = 0;
 static lv_obj_t * a_scale;
 static lv_obj_t * a_needle_h;
 static lv_obj_t * a_needle_m;
@@ -598,10 +630,141 @@ static void theme_apply(void) {
 }
 
 static void face_apply(void) {
-  lv_obj_t * faces[FACE_COUNT] = { face_digital, face_analog, face_cal };
+  lv_obj_t * faces[FACE_COUNT] = { face_digital, face_analog, face_cal,
+                                   face_sw, face_tm };
   for (int i = 0; i < FACE_COUNT; i++) {
     if (i == face_mode) lv_obj_remove_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_add_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+// ---- Stopwatch -------------------------------------------------------------
+static uint32_t sw_elapsed_ms(void) {
+  return sw_accum_ms + (sw_running ? millis() - sw_t0 : 0);
+}
+
+static void sw_update_label(void) {
+  uint32_t ms = sw_elapsed_ms();
+  uint32_t s  = ms / 1000;
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%02lu:%02lu",
+           (unsigned long)((s / 60) % 100), (unsigned long)(s % 60));
+  lv_label_set_text(label_sw_time, buf);
+  snprintf(buf, sizeof(buf), ".%lu", (unsigned long)((ms / 100) % 10));
+  lv_label_set_text(label_sw_frac, buf);
+}
+
+static void sw_start_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;   // swipe tail, not a press
+  if (sw_running) {
+    sw_accum_ms += millis() - sw_t0;
+    sw_running = false;
+  } else {
+    sw_t0 = millis();
+    sw_running = true;
+  }
+  lv_label_set_text(lbl_sw_start, sw_running ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+}
+
+static void sw_reset_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  sw_running = false;
+  sw_accum_ms = 0;
+  lv_label_set_text(lbl_sw_start, LV_SYMBOL_PLAY);
+  sw_update_label();
+}
+
+// ---- Countdown timer -------------------------------------------------------
+static void spk_tone(uint32_t hz) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcWriteTone(SPK_PIN, hz);
+#else
+  ledcWriteTone(SPK_CHANNEL, hz);
+#endif
+}
+
+static void tm_update_label(void) {
+  // Round up so a freshly set 5:00 shows 5:00 until it has really elapsed
+  uint32_t s = (tm_left_ms + 999) / 1000;
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%02lu:%02lu",
+           (unsigned long)(s / 60), (unsigned long)(s % 60));
+  lv_label_set_text(label_tm_time, buf);
+}
+
+static void alarm_stop(void) {
+  alarm_on = false;
+  spk_tone(0);
+  if (alarm_overlay) lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void alarm_start(void) {
+  alarm_on = true;
+  alarm_t0 = millis();
+  if (alarm_overlay) lv_obj_remove_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void alarm_overlay_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  alarm_stop();
+}
+
+static void tm_add_cb(lv_event_t * e) {
+  if (millis() - last_gesture_ms < 600) return;
+  uint32_t add_min = (uint32_t)(intptr_t)lv_event_get_user_data(e);
+  tm_left_ms += add_min * 60000u;
+  if (tm_left_ms > TIMER_MAX_MS) tm_left_ms = TIMER_MAX_MS;
+  tm_update_label();
+}
+
+static void tm_start_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  if (!tm_running && tm_left_ms == 0) return;   // nothing to count down
+  tm_running = !tm_running;
+  if (tm_running) tm_last_ms = millis();
+  lv_label_set_text(lbl_tm_start, tm_running ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+}
+
+static void tm_reset_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  tm_running = false;
+  tm_left_ms = 0;
+  lv_label_set_text(lbl_tm_start, LV_SYMBOL_PLAY);
+  tm_update_label();
+}
+
+// Called every UI tick: advances the countdown (even while the face is
+// hidden), drives the alarm blink/beep, and repaints whichever of the two
+// time displays is on screen.
+static void sw_tm_tick(void) {
+  if (tm_running) {
+    uint32_t now = millis();
+    uint32_t d = now - tm_last_ms;
+    tm_last_ms = now;
+    if (tm_left_ms > d) {
+      tm_left_ms -= d;
+    } else {
+      tm_left_ms = 0;
+      tm_running = false;
+      lv_label_set_text(lbl_tm_start, LV_SYMBOL_PLAY);
+      alarm_start();
+    }
+    tm_update_label();
+  }
+
+  if (alarm_on) {
+    bool phase = ((millis() - alarm_t0) / 400) & 1;
+    spk_tone(phase ? ALARM_TONE_HZ : 0);
+    lv_obj_set_style_bg_opa(alarm_overlay, phase ? LV_OPA_50 : LV_OPA_10, 0);
+    if (millis() - alarm_t0 > TIMER_ALARM_MS) alarm_stop();
+  }
+
+  if (face_sw && !lv_obj_has_flag(face_sw, LV_OBJ_FLAG_HIDDEN) && sw_running) {
+    sw_update_label();
   }
 }
 
@@ -795,6 +958,8 @@ static void timer_cb(lv_timer_t * timer) {
   time_t now = time(nullptr);
   struct tm t;
   localtime_r(&now, &t);
+
+  sw_tm_tick();
 
   if (t.tm_sec != last_sec) {
     last_sec = t.tm_sec;
@@ -1151,6 +1316,74 @@ static void create_calendar_face(void) {
   }
 }
 
+// Symbol button with a montserrat-20 label; returns the button.
+static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
+                              lv_event_cb_t cb, void * user_data,
+                              int32_t w, int32_t h) {
+  lv_obj_t * b = lv_button_create(parent);
+  lv_obj_set_size(b, w, h);
+  lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user_data);
+  lv_obj_t * l = lv_label_create(b);
+  lv_label_set_text(l, txt);
+  lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+  lv_obj_center(l);
+  return b;
+}
+
+// ============ Stopwatch face: [ 12:34 .7 ]  [>] [reset] ==================
+static void create_stopwatch_face(void) {
+  face_sw = make_box(lv_screen_active());
+  lv_obj_set_size(face_sw, lv_pct(100), lv_pct(100));
+
+  lv_obj_t * row = make_box(face_sw);
+  lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_align(row, LV_ALIGN_CENTER, 0, -34);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 4, 0);
+
+  label_sw_time = lv_label_create(row);
+  lv_label_set_text(label_sw_time, "00:00");
+  lv_obj_set_style_text_font(label_sw_time, FONT_TIME, 0);
+
+  label_sw_frac = lv_label_create(row);
+  lv_label_set_text(label_sw_frac, ".0");
+  lv_obj_set_style_text_font(label_sw_frac, FONT_LUNAR_NUM, 0);
+
+  lv_obj_t * b = make_button(face_sw, LV_SYMBOL_PLAY, sw_start_cb, NULL, 100, 44);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -62, -16);
+  lbl_sw_start = lv_obj_get_child(b, 0);
+
+  b = make_button(face_sw, LV_SYMBOL_REFRESH, sw_reset_cb, NULL, 100, 44);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 62, -16);
+}
+
+// ============ Timer face: [ 05:00 ]  [+1m][+5m][+10m]  [>] [reset] ========
+static void create_timer_face(void) {
+  face_tm = make_box(lv_screen_active());
+  lv_obj_set_size(face_tm, lv_pct(100), lv_pct(100));
+
+  label_tm_time = lv_label_create(face_tm);
+  lv_label_set_text(label_tm_time, "00:00");
+  lv_obj_set_style_text_font(label_tm_time, FONT_TIME, 0);
+  lv_obj_align(label_tm_time, LV_ALIGN_CENTER, 0, -46);
+
+  static const int PRESET_MIN[3] = { 1, 5, 10 };
+  static const char * PRESET_TXT[3] = { "+1m", "+5m", "+10m" };
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t * b = make_button(face_tm, PRESET_TXT[i], tm_add_cb,
+                               (void *)(intptr_t)PRESET_MIN[i], 84, 40);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_MID, (i - 1) * 96, -66);
+  }
+
+  lv_obj_t * b = make_button(face_tm, LV_SYMBOL_PLAY, tm_start_cb, NULL, 100, 44);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -62, -14);
+  lbl_tm_start = lv_obj_get_child(b, 0);
+
+  b = make_button(face_tm, LV_SYMBOL_REFRESH, tm_reset_cb, NULL, 100, 44);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 62, -14);
+}
+
 void lv_create_main_gui(void) {
 
   // 테마 배경 + 주황 세그먼트
@@ -1343,13 +1576,26 @@ void lv_create_main_gui(void) {
 
   create_analog_face();
   create_calendar_face();
+  create_stopwatch_face();
+  create_timer_face();
   face_apply();         // show the face restored from NVS
 
   create_brightness_panel();
   bl_set_pct(bl_pct);   // syncs the label with the restored value
 
-  // Poll 5x per second so the second boundary is never more than ~200 ms late
-  lv_timer_t * timer = lv_timer_create(timer_cb, 200, NULL);
+  // Full-screen alarm flash on the top layer, above the panel; tap to stop
+  alarm_overlay = lv_obj_create(lv_layer_top());
+  lv_obj_remove_style_all(alarm_overlay);
+  lv_obj_set_size(alarm_overlay, lv_pct(100), lv_pct(100));
+  lv_obj_set_style_bg_color(alarm_overlay, lv_color_hex(0xFF3300), 0);
+  lv_obj_set_style_bg_opa(alarm_overlay, LV_OPA_30, 0);
+  lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(alarm_overlay, alarm_overlay_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
+
+  // 10 ticks per second: the stopwatch shows tenths, and the second
+  // boundary of the clock is never more than ~100 ms late
+  lv_timer_t * timer = lv_timer_create(timer_cb, 100, NULL);
   lv_timer_ready(timer);
 }
 
@@ -1456,6 +1702,16 @@ void setup() {
 
 #if AUTO_BL
   analogSetPinAttenuation(LDR_PIN, ADC_11db);
+#endif
+
+  // Speaker for the timer alarm, silent until needed
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttach(SPK_PIN, ALARM_TONE_HZ, 10);
+  ledcWriteTone(SPK_PIN, 0);
+#else
+  ledcSetup(SPK_CHANNEL, ALARM_TONE_HZ, 10);
+  ledcAttachPin(SPK_PIN, SPK_CHANNEL);
+  ledcWriteTone(SPK_CHANNEL, 0);
 #endif
 
   lv_indev_t * indev = lv_indev_create();
