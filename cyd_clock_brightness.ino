@@ -1047,8 +1047,10 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     // Presses that began on a clickable widget (a button, the slider) belong
     // to that widget and nothing else: no gesture classification for them,
     // so a finger that wobbles, rolls or slides off a button can neither be
-    // swallowed as "ambiguous" nor turned into a swipe - LVGL's own
-    // PRESS_LOST handles the slide-off. Gestures start on the background,
+    // swallowed as "ambiguous" nor turned into a swipe. LVGL keeps the
+    // widget pressed wherever the finger goes (PRESS_LOCK, default on every
+    // object) and sends CLICKED on release without re-testing the position,
+    // so only the press location decides. Gestures start on the background,
     // labels or the analog dial - everything that lets the press fall
     // through to the screen. Every press is reported to LVGL from its first
     // confirmed frame, so indev->pointer.act_obj (the object LVGL pressed;
@@ -1640,6 +1642,10 @@ static void create_brightness_panel(void) {
   for (int i = 0; i < THEME_COUNT; i++) {
     lv_obj_t * b = lv_obj_create(bl_panel);
     lv_obj_remove_style_all(b);
+    // Not scrollable: a swatch this small is often tapped with a bit of
+    // roll, and LVGL would otherwise start an elastic scroll of the swatch
+    // itself past its 10 px scroll limit and drop the click.
+    lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(b, 24, 24);
     lv_obj_align(b, LV_ALIGN_TOP_LEFT, (i % 8) * 37, 26 + (i / 8) * 30);
     lv_obj_set_style_radius(b, 6, 0);
