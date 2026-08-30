@@ -25,6 +25,9 @@
         highlighted); swipe left/right to cycle faces, choice kept in NVS
       - stopwatch and countdown-timer faces; the timer rings the CYD's
         speaker (GPIO 26) and flashes the screen until tapped
+      - wake-up alarms (up to ALARM_COUNT, each with weekday selection,
+        one-shot mode, H/M buttons with hold-to-repeat, ON/OFF, kept in
+        NVS); ring like the timer, bell shown on the clock faces
       - 12 / 24-hour format toggle on the brightness panel, kept in NVS
       - background color selectable from swatches on the brightness panel
         (white / ivory / dark gray / black, THEMES table, kept in NVS)
@@ -235,12 +238,13 @@ static lv_obj_t * label_lunar_term;  // current solar term
 
 // The faces are full-screen sibling containers; exactly one is visible.
 // Swiping left/right cycles digital -> analog -> calendar -> stopwatch ->
-// timer -> digital. On the calendar face, swiping up/down browses to the
+// timer -> alarm -> digital. On the calendar face, swiping up/down browses to the
 // next/previous month; leaving the face snaps back to the current month.
-#define FACE_COUNT 5
+#define FACE_COUNT 6
 #define FACE_CAL   2
 #define FACE_SW    3
 #define FACE_TM    4
+#define FACE_ALARM 5
 
 // ======================= Stopwatch / Timer ================================
 // Buttons use LVGL's built-in FontAwesome symbols (play/pause/refresh), so
@@ -287,6 +291,29 @@ static uint32_t   tm_left_ms = 0;
 static uint32_t   tm_last_ms = 0;     // millis() of the previous countdown tick
 static bool       alarm_on = false;
 static uint32_t   alarm_t0 = 0;
+static uint32_t   alarm_limit_ms = 0;   // ring at most this long (timer vs wake alarm)
+
+static lv_obj_t * face_alarm;           // wake-up alarm clock
+static lv_obj_t * label_al_time;        // "07:30" in the big DSEG face
+static lv_obj_t * label_al_ampm;
+static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
+static lv_obj_t * label_bell;           // bell indicator on the digital face
+static lv_obj_t * label_bell_a;         // same, on the analog face
+typedef struct {
+  int     hh, mm;
+  bool    enabled;
+  uint8_t days;      // weekday mask, bit 0 = Sunday (tm_wday)
+  bool    once;      // ring once, then switch itself OFF
+} alarm_t;
+static alarm_t    alarms[ALARM_COUNT];   // all kept in NVS
+static int        al_sel = 0;            // alarm being edited on the face
+static lv_obj_t * btn_al_sel[ALARM_COUNT];
+static lv_obj_t * btn_al_day[7];
+static lv_obj_t * btn_al_once;
+// Weekday buttons run Monday..Sunday; entry i shows tm_wday AL_DAY_ORDER[i].
+static const int  AL_DAY_ORDER[7] = { 1, 2, 3, 4, 5, 6, 0 };
+static bool       al_dirty = false;      // NVS write pending
+static uint32_t   al_dirty_ms = 0;
 static lv_obj_t * a_scale;
 static lv_obj_t * a_bezel;            // raised rim behind the dial
 static lv_obj_t * a_face;             // dial face inside the rim
@@ -572,7 +599,7 @@ static void sw_fast_sync(void) {
 
 static void face_apply(void) {
   lv_obj_t * faces[FACE_COUNT] = { face_digital, face_analog, face_cal,
-                                   face_sw, face_tm };
+                                   face_sw, face_tm, face_alarm };
   for (int i = 0; i < FACE_COUNT; i++) {
     if (i == face_mode) lv_obj_remove_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
     else                lv_obj_add_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
@@ -707,9 +734,23 @@ static void alarm_stop(void) {
   if (alarm_overlay) lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void alarm_start(void) {
+// Write every alarm to NVS (only called when something actually changed).
+static void al_save_now(void) {
+  al_dirty = false;
+  char k[8];
+  for (int i = 0; i < ALARM_COUNT; i++) {
+    snprintf(k, sizeof(k), "a%d_h", i);  prefs.putInt(k, alarms[i].hh);
+    snprintf(k, sizeof(k), "a%d_m", i);  prefs.putInt(k, alarms[i].mm);
+    snprintf(k, sizeof(k), "a%d_on", i); prefs.putInt(k, alarms[i].enabled ? 1 : 0);
+    snprintf(k, sizeof(k), "a%d_d", i);  prefs.putInt(k, alarms[i].days);
+    snprintf(k, sizeof(k), "a%d_1", i);  prefs.putInt(k, alarms[i].once ? 1 : 0);
+  }
+}
+
+static void alarm_start(uint32_t limit_ms) {
   alarm_on = true;
   alarm_t0 = millis();
+  alarm_limit_ms = limit_ms;
   if (alarm_overlay) lv_obj_remove_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -758,7 +799,7 @@ static void sw_tm_tick(void) {
       tm_left_ms = 0;
       tm_running = false;
       lv_label_set_text(lbl_tm_start, LV_SYMBOL_PLAY);
-      alarm_start();
+      alarm_start(TIMER_ALARM_MS);
     }
     tm_update_label();
   }
@@ -767,8 +808,13 @@ static void sw_tm_tick(void) {
     bool phase = ((millis() - alarm_t0) / 400) & 1;
     spk_tone(phase ? ALARM_TONE_HZ : 0);
     lv_obj_set_style_bg_opa(alarm_overlay, phase ? LV_OPA_50 : LV_OPA_10, 0);
-    if (millis() - alarm_t0 > TIMER_ALARM_MS) alarm_stop();
+    if (millis() - alarm_t0 > alarm_limit_ms) alarm_stop();
   }
+
+  // Wake-alarm settings are written to NVS a couple of seconds after the
+  // last change (or at once by the OK button), so holding an adjust button
+  // does not hammer the flash.
+  if (al_dirty && millis() - al_dirty_ms > 2000) al_save_now();
 
   // (the running stopwatch display is repainted by sw_fast_timer)
 }
@@ -782,6 +828,7 @@ static void sw_tm_tick(void) {
 static void screen_click_cb(lv_event_t * e) {
   LV_UNUSED(e);
   if (millis() - last_gesture_ms < 600) return;
+  if (face_mode == FACE_ALARM) return;   // editing screen: background taps do nothing
   if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN)) {
     bl_panel_hide();
   } else {
@@ -1029,6 +1076,21 @@ static void timer_cb(lv_timer_t * timer) {
     }
 #endif
 
+    // Wake-up alarms: each fires at the start of its minute on a selected
+    // weekday; 1x alarms then disarm themselves. Several alarms on the same
+    // minute ring once together.
+    if (minute_changed) {
+      bool changed = false;
+      for (int i = 0; i < ALARM_COUNT; i++) {
+        alarm_t * a = &alarms[i];
+        if (!a->enabled || t.tm_hour != a->hh || t.tm_min != a->mm ||
+            !((a->days >> t.tm_wday) & 1)) continue;
+        if (!alarm_on) alarm_start(ALARM_RING_MS);
+        if (a->once) { a->enabled = false; changed = true; }
+      }
+      if (changed) { al_update_label(); al_mark_dirty(); }
+    }
+
     char ampm[4];
     strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
     // The analog dial is inherently 12-hour, so its AM/PM tag stays on in
@@ -1144,6 +1206,134 @@ static void timer_cb(lv_timer_t * timer) {
   }
 }
 
+// ---- Wake-up alarm ---------------------------------------------------------
+// Selected-state look for the weekday and "1x" toggles: orange when on, a
+// muted gray when off (make_button's gradient/shadow stay).
+static void al_style_toggle(lv_obj_t * b, bool on) {
+  lv_color_t base = on ? lv_color_hex(0xFF3300) : lv_color_hex(0x6A6A6A);
+  lv_obj_set_style_bg_color(b, base, 0);
+  lv_obj_set_style_bg_grad_color(b, lv_color_darken(base, 60), 0);
+  lv_obj_set_style_text_opa(lv_obj_get_child(b, 0), on ? LV_OPA_COVER : LV_OPA_60, 0);
+}
+
+// Repaint the alarm face for the selected alarm (time in the current 12/24 h
+// format, weekday and 1x toggles, ON/OFF button), the [1][2][3] selector
+// (a bell marks alarms that are ON) and the bell indicators on the clock
+// faces (shown while any alarm is ON).
+static void al_update_label(void) {
+  if (!label_al_time) return;
+  const alarm_t * a = &alarms[al_sel];
+
+  bool any_on = false;
+  for (int i = 0; i < ALARM_COUNT; i++) {
+    any_on |= alarms[i].enabled;
+    if (btn_al_sel[i]) {
+      char sb[12];
+      snprintf(sb, sizeof(sb), "%s%d", alarms[i].enabled ? LV_SYMBOL_BELL " " : "", i + 1);
+      lv_label_set_text(lv_obj_get_child(btn_al_sel[i], 0), sb);
+      al_style_toggle(btn_al_sel[i], i == al_sel);
+    }
+  }
+  for (int i = 0; i < 7; i++) {
+    if (btn_al_day[i]) al_style_toggle(btn_al_day[i], (a->days >> AL_DAY_ORDER[i]) & 1);
+  }
+  if (btn_al_once) al_style_toggle(btn_al_once, a->once);
+
+  char buf[8];
+  if (h24) {
+    snprintf(buf, sizeof(buf), "%02d:%02d", a->hh, a->mm);
+    lv_obj_add_flag(label_al_ampm, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    int h12 = a->hh % 12;
+    if (h12 == 0) h12 = 12;
+    snprintf(buf, sizeof(buf), "%d:%02d", h12, a->mm);
+    lv_label_set_text(label_al_ampm, a->hh < 12 ? "AM" : "PM");
+    lv_obj_remove_flag(label_al_ampm, LV_OBJ_FLAG_HIDDEN);
+  }
+  lv_label_set_text(label_al_time, buf);
+  lv_label_set_text(lbl_al_toggle, a->enabled ? LV_SYMBOL_BELL " ON" : LV_SYMBOL_MUTE " OFF");
+
+  lv_obj_t * bells[2] = { label_bell, label_bell_a };
+  for (int i = 0; i < 2; i++) {
+    if (!bells[i]) continue;
+    if (any_on) lv_obj_remove_flag(bells[i], LV_OBJ_FLAG_HIDDEN);
+    else        lv_obj_add_flag(bells[i], LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+static void al_sel_cb(lv_event_t * e) {
+  if (millis() - last_gesture_ms < 600) return;
+  al_sel = (int)(intptr_t)lv_event_get_user_data(e);
+  al_update_label();
+}
+
+static void al_mark_dirty(void) {
+  al_dirty = true;
+  al_dirty_ms = millis();
+}
+
+// H-/H+/M-/M+ : user_data is the step in minutes. A tap steps once; holding
+// the button repeats (LV_EVENT_LONG_PRESSED_REPEAT) for fast adjustment.
+static void al_adjust_cb(lv_event_t * e) {
+  static bool repeated = false;   // a hold already stepped; swallow the release click
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_CLICKED) {
+    if (repeated) { repeated = false; return; }
+    if (millis() - last_gesture_ms < 600) return;
+  } else {
+    repeated = true;
+  }
+  int step = (int)(intptr_t)lv_event_get_user_data(e);
+  alarm_t * a = &alarms[al_sel];
+  int total = (a->hh * 60 + a->mm + step) % (24 * 60);
+  if (total < 0) total += 24 * 60;
+  a->hh = total / 60;
+  a->mm = total % 60;
+  al_update_label();
+  al_mark_dirty();
+}
+
+static void al_toggle_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  alarms[al_sel].enabled = !alarms[al_sel].enabled;
+  al_update_label();
+  al_mark_dirty();
+}
+
+// Weekday toggles (user_data = tm_wday); the last selected day cannot be
+// cleared, so the alarm always has at least one day to ring on.
+static void al_day_cb(lv_event_t * e) {
+  if (millis() - last_gesture_ms < 600) return;
+  int d = (int)(intptr_t)lv_event_get_user_data(e);
+  alarm_t * a = &alarms[al_sel];
+  uint8_t next = a->days ^ (uint8_t)(1 << d);
+  if (next == 0) return;
+  a->days = next;
+  al_update_label();
+  al_mark_dirty();
+}
+
+// "1x": ring at the next matching time, then switch the alarm OFF by itself.
+static void al_once_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  alarms[al_sel].once = !alarms[al_sel].once;
+  al_update_label();
+  al_mark_dirty();
+}
+
+// OK: commit any pending alarm changes to NVS right away and move on to the
+// next face (swipes work here too).
+static void al_done_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (millis() - last_gesture_ms < 600) return;
+  if (al_dirty) al_save_now();
+  face_mode = (face_mode + 1) % FACE_COUNT;
+  face_apply();
+  prefs.putInt("face", face_mode);
+}
+
 static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
                               lv_event_cb_t cb, void * user_data,
                               int32_t w, int32_t h);
@@ -1157,6 +1347,7 @@ static void time_fmt_apply(void) {
   if (label_ghost) lv_obj_set_width(label_ghost, w);
   if (lbl_h24) lv_label_set_text(lbl_h24, h24 ? "24H" : "12H");
   time_fmt_dirty = true;   // timer_cb re-renders the hour on its next tick
+  al_update_label();
 }
 
 static void h24_btn_cb(lv_event_t * e) {
@@ -1419,6 +1610,13 @@ static void create_analog_face(void) {
   lv_obj_set_width(label_a_event, 116);          // long names wrap
   lv_obj_set_style_text_align(label_a_event, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
+
+  // Alarm bell in the same bottom-right spot as on the digital face
+  label_bell_a = lv_label_create(face_analog);
+  lv_label_set_text(label_bell_a, LV_SYMBOL_BELL);
+  lv_obj_set_style_text_font(label_bell_a, &lv_font_montserrat_20, 0);
+  lv_obj_align(label_bell_a, LV_ALIGN_BOTTOM_RIGHT, -14, -18);
+  lv_obj_add_flag(label_bell_a, LV_OBJ_FLAG_HIDDEN);
   // Colors are applied by theme_apply() from lv_create_main_gui() once
   // every face exists - calling it here would leave the cards of the faces
   // created later (calendar, stopwatch, timer) at LVGL's default white.
@@ -1589,6 +1787,73 @@ static void create_timer_face(void) {
   lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 62, -14);
 }
 
+// ============ Alarm face ====================================================
+//   [ 07:30 AM ]                    card, y 6..90 (selected alarm's time)
+//   [1][2][3]                       alarm selector, y 94..120
+//   [월][화][수][목][금][토][일]      weekday toggles, y 124..152
+//   [H-][H+][M-][M+]                y 158..190
+//   [bell ON/OFF] [1x] [OK]         y 196..232 (OK saves and leaves)
+static void create_alarm_face(void) {
+  face_alarm = make_box(lv_screen_active());
+  lv_obj_set_size(face_alarm, lv_pct(100), lv_pct(100));
+  make_card(face_alarm, 300, 84, LV_ALIGN_CENTER, 0, -72, DEPTH_SHADOW_W);
+
+  lv_obj_t * row = make_box(face_alarm);
+  lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_align(row, LV_ALIGN_CENTER, 0, -72);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(row, 8, 0);
+
+  label_al_time = lv_label_create(row);
+  lv_label_set_text(label_al_time, "");
+  lv_obj_set_style_text_font(label_al_time, FONT_TIME, 0);
+
+  label_al_ampm = lv_label_create(row);
+  lv_label_set_text(label_al_ampm, "AM");
+  lv_obj_set_style_text_font(label_al_ampm, FONT_AMPM, 0);
+  lv_obj_set_style_pad_bottom(label_al_ampm, 6, 0);
+
+  // Alarm selector [1][2][3]; texts are filled by al_update_label()
+  for (int i = 0; i < ALARM_COUNT; i++) {
+    lv_obj_t * b = make_button(face_alarm, "", al_sel_cb, (void *)(intptr_t)i, 56, 26);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_MID, (i - (ALARM_COUNT - 1) / 2.0f) * 64, -120);
+    btn_al_sel[i] = b;
+  }
+
+  // Weekday toggles Monday..Sunday (tm_wday via AL_DAY_ORDER), Korean font
+  for (int i = 0; i < 7; i++) {
+    int d = AL_DAY_ORDER[i];
+    lv_obj_t * b = make_button(face_alarm, WEEKDAY_KR[d], al_day_cb,
+                               (void *)(intptr_t)d, 38, 28);
+    lv_obj_set_style_text_font(lv_obj_get_child(b, 0), FONT_KR, 0);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -132 + i * 44, -88);
+    btn_al_day[i] = b;
+  }
+
+  static const char * ADJ_TXT[4]  = { "H-", "H+", "M-", "M+" };
+  static const int    ADJ_STEP[4] = { -60, 60, -1, 1 };
+  for (int i = 0; i < 4; i++) {
+    lv_obj_t * b = make_button(face_alarm, ADJ_TXT[i], al_adjust_cb,
+                               (void *)(intptr_t)ADJ_STEP[i], 68, 32);
+    lv_obj_add_event_cb(b, al_adjust_cb, LV_EVENT_LONG_PRESSED_REPEAT,
+                        (void *)(intptr_t)ADJ_STEP[i]);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -114 + i * 76, -50);
+  }
+
+  lv_obj_t * b = make_button(face_alarm, LV_SYMBOL_MUTE " OFF", al_toggle_cb, NULL, 100, 36);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, -76, -8);
+  lbl_al_toggle = lv_obj_get_child(b, 0);
+
+  btn_al_once = make_button(face_alarm, "1x", al_once_cb, NULL, 56, 36);
+  lv_obj_align(btn_al_once, LV_ALIGN_BOTTOM_MID, 8, -8);
+
+  b = make_button(face_alarm, LV_SYMBOL_OK " OK", al_done_cb, NULL, 76, 36);
+  lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 88, -8);
+
+  al_update_label();
+}
+
 void lv_create_main_gui(void) {
 
   // 테마 배경 + 주황 세그먼트
@@ -1603,6 +1868,13 @@ void lv_create_main_gui(void) {
   lv_obj_set_size(face_digital, lv_pct(100), lv_pct(100));
   // Plate under the three rows (content spans y 28..212 -> 14..226 plate)
   make_card(face_digital, 312, 212, LV_ALIGN_CENTER, 0, 0, DEPTH_SHADOW_W);
+
+  // Bell in the plate's bottom-right corner while the wake-up alarm is set
+  label_bell = lv_label_create(face_digital);
+  lv_label_set_text(label_bell, LV_SYMBOL_BELL);
+  lv_obj_set_style_text_font(label_bell, &lv_font_montserrat_20, 0);
+  lv_obj_align(label_bell, LV_ALIGN_BOTTOM_RIGHT, -14, -18);
+  lv_obj_add_flag(label_bell, LV_OBJ_FLAG_HIDDEN);
 
   // ---- Styles
   static lv_style_t style_time;
@@ -1800,6 +2072,7 @@ void lv_create_main_gui(void) {
   create_calendar_face();
   create_stopwatch_face();
   create_timer_face();
+  create_alarm_face();
   theme_apply();        // now that every face and card exists
   face_apply();         // show the face restored from NVS
 
@@ -1903,6 +2176,18 @@ void setup() {
   theme_idx = prefs.getInt("theme", 0);
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
   h24 = prefs.getInt("h24", 0) != 0;
+  for (int i = 0; i < ALARM_COUNT; i++) {
+    char k[8];
+    alarm_t * a = &alarms[i];
+    snprintf(k, sizeof(k), "a%d_h", i);  a->hh = prefs.getInt(k, ALARM_DEFAULT_HH);
+    snprintf(k, sizeof(k), "a%d_m", i);  a->mm = prefs.getInt(k, ALARM_DEFAULT_MM);
+    snprintf(k, sizeof(k), "a%d_on", i); a->enabled = prefs.getInt(k, 0) != 0;
+    snprintf(k, sizeof(k), "a%d_d", i);  a->days = (uint8_t)(prefs.getInt(k, 0x7F) & 0x7F);
+    snprintf(k, sizeof(k), "a%d_1", i);  a->once = prefs.getInt(k, 0) != 0;
+    if (a->hh < 0 || a->hh > 23) a->hh = ALARM_DEFAULT_HH;
+    if (a->mm < 0 || a->mm > 59) a->mm = ALARM_DEFAULT_MM;
+    if (a->days == 0) a->days = 0x7F;
+  }
 
   // Touch controller on its own SPI bus, driven directly (see xpt_frame)
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
