@@ -163,12 +163,14 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // sees a stream of press/release pairs instead of one continuous drag.
 #define TOUCH_RELEASE_DEBOUNCE_MS 60
 
-// Swipe (face switch) recognition. LVGL's own gesture detector requires a
-// minimum *instantaneous velocity* at release, which pressure wobble on a
-// resistive panel rarely satisfies - swipes kept landing as taps. Instead,
-// a swipe is judged purely on displacement between press and release:
-// at least this many screen px of horizontal travel, and more horizontal
-// than vertical by 2:1. A tap only wanders a few px, so no false swipes.
+// Swipe (face switch) recognition, done directly in touchscreen_read() so it
+// works no matter which widget sits under the finger (LVGL press events stop
+// at clickable widgets like the analog dial and don't bubble to the screen).
+// LVGL's own gesture detector is not used either: it requires a minimum
+// *instantaneous velocity* at release, which pressure wobble on a resistive
+// panel rarely satisfies. A swipe here is pure displacement between press
+// and release: at least this many px of screen-horizontal travel, and more
+// horizontal than vertical by 2:1. A tap only wanders a few px.
 #define TOUCH_SWIPE_MIN_PX 30
 
 // Set to 1 to print raw + mapped touch coordinates on the serial monitor.
@@ -376,34 +378,9 @@ static void face_apply(void) {
   }
 }
 
-// Swipe left/right anywhere on the clock switches the face. Displacement
-// between press and release decides it - no velocity requirement, which a
-// resistive panel's wobbly release would fail. The brightness panel lives
-// on the top layer, so its slider drags never reach these handlers.
-static lv_point_t swipe_start;
-
-static void screen_pressed_cb(lv_event_t * e) {
-  LV_UNUSED(e);
-  lv_indev_get_point(lv_indev_active(), &swipe_start);
-}
-
-static void screen_released_cb(lv_event_t * e) {
-  LV_UNUSED(e);
-  lv_point_t p;
-  lv_indev_get_point(lv_indev_active(), &p);
-  int32_t dx = p.x - swipe_start.x;
-  int32_t dy = p.y - swipe_start.y;
-  if (LV_ABS(dx) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dx) > 2 * LV_ABS(dy)) {
-    last_gesture_ms = millis();   // swallow the CLICKED that follows
-    face_mode = !face_mode;
-    face_apply();
-    prefs.putInt("face", face_mode);
-  }
-}
-
-// A tap anywhere on the clock face opens the panel. CLICKED also fires at
-// the end of a swipe (the screen is not scrollable, so moving does not
-// suppress it) - RELEASED runs first and its timestamp filters those out.
+// A tap anywhere on the clock face opens the panel. Swipes are detected in
+// touchscreen_read() (which stamps last_gesture_ms before this fires), so
+// the CLICKED at the end of a swipe is filtered out here.
 static void screen_click_cb(lv_event_t * e) {
   LV_UNUSED(e);
   if (millis() - last_gesture_ms < 600) return;
@@ -423,6 +400,8 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static int32_t  last_x = 0, last_y = 0;
   static uint32_t last_ok_ms = 0;
   static bool     pressed = false;
+  static int32_t  press_x = 0, press_y = 0;
+  static bool     swipe_armed = false;
 
   if (touchscreen.touched()) {
     TS_Point p = touchscreen.getPoint();
@@ -448,6 +427,15 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
                   p.x, p.y, (long)x, (long)y);
 #endif
 
+    if (!pressed) {
+      // New press: remember where it started. Swipes are ignored while the
+      // brightness panel is open, so dragging the slider never flips faces.
+      press_x = x;
+      press_y = y;
+      swipe_armed = (bl_panel == NULL) ||
+                    lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+
     last_x = x;
     last_y = y;
     last_ok_ms = millis();
@@ -457,6 +445,19 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     // Momentary pressure dip mid-drag: hold the last position.
   }
   else {
+    if (pressed && swipe_armed && face_digital) {
+      // Release edge: displacement-based swipe check, in native coordinates.
+      // The display is rotated 270 degrees, so screen-horizontal movement is
+      // the native Y axis.
+      int32_t dh = last_y - press_y;
+      int32_t dv = last_x - press_x;
+      if (LV_ABS(dh) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dh) > 2 * LV_ABS(dv)) {
+        last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
+        face_mode = !face_mode;
+        face_apply();
+        prefs.putInt("face", face_mode);
+      }
+    }
     pressed = false;
   }
 
@@ -806,8 +807,6 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(0xFF3300), 0);
-  lv_obj_add_event_cb(lv_screen_active(), screen_pressed_cb, LV_EVENT_PRESSED, NULL);
-  lv_obj_add_event_cb(lv_screen_active(), screen_released_cb, LV_EVENT_RELEASED, NULL);
   lv_obj_add_event_cb(lv_screen_active(), screen_click_cb, LV_EVENT_CLICKED, NULL);
 
   // Everything of the digital face hangs off this container so one flag
