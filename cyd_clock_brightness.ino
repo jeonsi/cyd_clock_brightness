@@ -161,6 +161,17 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define TOUCH_INVERT_X 1
 #define TOUCH_INVERT_Y 1
 
+// Constant offset correction, in native px, applied after the inversion
+// above. The raw driver samples differently from the old library (settled
+// consecutive reads instead of interleaved ones), which shifted the
+// effective calibration slightly. Native X maps to the SCREEN-VERTICAL axis
+// under the 270-degree rotation: if the pointer registers BELOW where you
+// actually touch (you must aim above a target to hit it), make TOUCH_TRIM_X
+// more positive; if it registers above, more negative. TOUCH_TRIM_Y is the
+// same idea for the screen-horizontal axis.
+#define TOUCH_TRIM_X 20
+#define TOUCH_TRIM_Y 0
+
 // Momentary contact loss during a drag is common on a resistive panel. Hold
 // the last position for this long before reporting a release, otherwise LVGL
 // sees a stream of press/release pairs instead of one continuous drag.
@@ -493,6 +504,9 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     y = (SCREEN_HEIGHT - 1) - y;
 #endif
 
+    x += TOUCH_TRIM_X;
+    y += TOUCH_TRIM_Y;
+
     if (x < 0) x = 0;
     if (x >= SCREEN_WIDTH)  x = SCREEN_WIDTH  - 1;
     if (y < 0) y = 0;
@@ -762,7 +776,7 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_bg_color(bl_slider, lv_color_hex(0xFF3300), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(bl_slider, lv_color_hex(0xFF8855), LV_PART_KNOB);
   // Enlarge the touch area so the knob is easy to grab on a resistive panel
-  lv_obj_set_ext_click_area(bl_slider, 16);
+  lv_obj_set_ext_click_area(bl_slider, 28);
   lv_obj_add_event_cb(bl_slider, bl_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
   lv_obj_add_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);

@@ -148,6 +148,7 @@ Arduino IDE 기준:
 | `TOUCH_SAMPLES` | 8 | 축당 샘플 수(중간 절반 평균). 늘리면 더 안정, 읽기 시간 증가 |
 | `TOUCH_FILTER_ALPHA` | 0.4 | 프레임 간 EMA 계수. 낮추면 더 부드럽지만 커서 반응이 느려짐 |
 | `TOUCH_RAW_MIN/MAX_X/Y` | 실측값 | 터치 캘리브레이션. 패널마다 다르므로 `TOUCH_DEBUG 1`로 raw 값을 찍어 조정 |
+| `TOUCH_TRIM_X/Y` | 20/0 | 고정 오프셋 보정(네이티브 px). 포인터가 실제 터치보다 화면 아래를 가리키면 X를 +로, 위를 가리키면 −로 |
 | `TOUCH_DEBUG` | 0 | 1로 켜면 시리얼로 터치 좌표 출력 |
 
 ## 라이선스
