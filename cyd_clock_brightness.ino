@@ -348,14 +348,19 @@ static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
 static lv_obj_t * label_lunar_term;  // current solar term
 
 // The faces are full-screen sibling containers; exactly one is visible.
-// Swiping cycles digital -> analog -> calendar -> digital.
+// Swiping left/right cycles digital -> analog -> calendar -> digital.
+// On the calendar face, swiping up/down browses to the next/previous
+// month; leaving the face snaps back to the current month.
 #define FACE_COUNT 3
+#define FACE_CAL   2
+#define CAL_OFF_MAX 120   // browse limit, months away from today
 static lv_obj_t * face_digital;
 static lv_obj_t * face_analog;
 static lv_obj_t * face_cal;
 static lv_obj_t * label_c_title;      // "2026.8"
 static lv_obj_t * label_c_wd[7];      // 일..토 header
 static lv_obj_t * label_c_day[42];    // 6 rows x 7 columns
+static int        cal_off = 0;        // viewed month, relative to current
 static lv_obj_t * a_scale;
 static lv_obj_t * a_needle_h;
 static lv_obj_t * a_needle_m;
@@ -507,15 +512,21 @@ static bool theme_is_dark(void) {
   return (299 * r + 587 * g + 114 * b) / 1000 < 128;
 }
 
-// Repaint the calendar face for the given day: month title, weekday header
-// and the 6x7 day grid. Sundays and public holidays are red, Saturdays
-// blue, today sits on an orange pad with white text. Colors are picked per
-// theme lightness, so this also runs when the theme changes.
+// Repaint the calendar face: month title, weekday header and the 6x7 day
+// grid. The viewed month is the current one shifted by cal_off. Sundays
+// and public holidays are red, Saturdays blue; today sits on an orange pad
+// with white text, and only when the real current month is shown. Colors
+// are picked per theme lightness, so this also runs on theme changes.
 static void cal_refresh(const struct tm * t) {
   if (!face_cal) return;
 
+  int mt  = (t->tm_year + 1900) * 12 + t->tm_mon + cal_off;
+  int y   = mt / 12;
+  int mon = mt % 12;                    // 0-based
+  bool this_month = (cal_off == 0);
+
   char buf[16];
-  snprintf(buf, sizeof(buf), "%04d.%d", t->tm_year + 1900, t->tm_mon + 1);
+  snprintf(buf, sizeof(buf), "%04d.%d", y, mon + 1);
   lv_label_set_text(label_c_title, buf);
 
   lv_color_t ink  = lv_color_hex(THEMES[theme_idx].dial_major);
@@ -528,10 +539,10 @@ static void cal_refresh(const struct tm * t) {
   }
 
   static const int MDAYS[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  int y = t->tm_year + 1900;
-  int dim = MDAYS[t->tm_mon];
-  if (t->tm_mon == 1 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) dim = 29;
-  int first_wd = (t->tm_wday - ((t->tm_mday - 1) % 7) + 7) % 7;
+  int dim = MDAYS[mon];
+  if (mon == 1 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) dim = 29;
+  // 1970-01-01 (day 0 of the epoch) was a Thursday
+  int first_wd = (int)((klc_days_from_civil(y, mon + 1, 1) + 4) % 7);
 
   for (int i = 0; i < 42; i++) {
     int d = i - first_wd + 1;
@@ -543,11 +554,11 @@ static void cal_refresh(const struct tm * t) {
     char db[4];
     snprintf(db, sizeof(db), "%d", d);
     lv_label_set_text(label_c_day[i], db);
-    if (d == t->tm_mday) {
+    if (this_month && d == t->tm_mday) {
       lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_COVER, 0);
       lv_obj_set_style_text_color(label_c_day[i], lv_color_hex(0xFFFFFF), 0);
     } else {
-      uint32_t ymd = (uint32_t)y * 10000u + (uint32_t)(t->tm_mon + 1) * 100u + (uint32_t)d;
+      uint32_t ymd = (uint32_t)y * 10000u + (uint32_t)(mon + 1) * 100u + (uint32_t)d;
       int wd = i % 7;
       lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_TRANSP, 0);
       lv_obj_set_style_text_color(label_c_day[i],
@@ -680,8 +691,22 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
         // dh > 0 is a rightward swipe on screen (screen x = native y).
         // Swipe left -> next face, swipe right -> previous face.
         face_mode = (face_mode + (dh < 0 ? 1 : FACE_COUNT - 1)) % FACE_COUNT;
+        if (cal_off != 0) {           // leaving a browsed month snaps back
+          cal_off = 0;
+          cal_refresh_now();
+        }
         face_apply();
         prefs.putInt("face", face_mode);
+      }
+      else if (face_mode == FACE_CAL &&
+               LV_ABS(dv) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dv) > 2 * LV_ABS(dh)) {
+        // Vertical swipe on the calendar browses months: up (dv > 0, since
+        // screen y runs against native x) -> next, down -> previous.
+        last_gesture_ms = millis();
+        cal_off += (dv > 0) ? 1 : -1;
+        if (cal_off >  CAL_OFF_MAX) cal_off =  CAL_OFF_MAX;
+        if (cal_off < -CAL_OFF_MAX) cal_off = -CAL_OFF_MAX;
+        cal_refresh_now();
       }
     }
     pressed = false;
