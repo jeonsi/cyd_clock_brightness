@@ -371,6 +371,15 @@ static lv_obj_t * label_lunar_term;  // current solar term
 #define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
 #define ALARM_TONE_HZ   2000
 #define BOOT_BEEP       1    // double beep at power-on to verify the speaker
+
+// ======================= Hourly chime =====================================
+// One short beep at the top of every hour, daytime only by default so a
+// bedside clock stays quiet at night. Set the hours to 0 and 23 for an
+// around-the-clock chime, or HOURLY_CHIME to 0 to disable it.
+#define HOURLY_CHIME     1
+#define CHIME_MS         150
+#define CHIME_FROM_HOUR  7    // first chiming hour (inclusive)
+#define CHIME_TO_HOUR    22   // last chiming hour (inclusive)
 static lv_obj_t * face_digital;
 static lv_obj_t * face_analog;
 static lv_obj_t * face_cal;
@@ -396,6 +405,7 @@ static uint32_t   tm_left_ms = 0;
 static uint32_t   tm_last_ms = 0;     // millis() of the previous countdown tick
 static bool       alarm_on = false;
 static uint32_t   alarm_t0 = 0;
+static uint32_t   chime_until_ms = 0;   // nonzero while the hourly beep sounds
 static lv_obj_t * a_scale;
 static lv_obj_t * a_needle_h;
 static lv_obj_t * a_needle_m;
@@ -764,6 +774,12 @@ static void sw_tm_tick(void) {
     if (millis() - alarm_t0 > TIMER_ALARM_MS) alarm_stop();
   }
 
+  // End of the hourly chime beep (started in timer_cb on the minute change)
+  if (chime_until_ms && (int32_t)(millis() - chime_until_ms) >= 0) {
+    chime_until_ms = 0;
+    if (!alarm_on) spk_tone(0);
+  }
+
   if (face_sw && !lv_obj_has_flag(face_sw, LV_OBJ_FLAG_HIDDEN) && sw_running) {
     sw_update_label();
   }
@@ -980,8 +996,17 @@ static void timer_cb(lv_timer_t * timer) {
   }
 
   if (t.tm_min != last_min) {
+    bool first_update = (last_min == -1);   // GUI just built: don't chime
     last_min = t.tm_min;
     char buf[8];
+
+#if HOURLY_CHIME
+    if (!first_update && t.tm_min == 0 && !alarm_on &&
+        t.tm_hour >= CHIME_FROM_HOUR && t.tm_hour <= CHIME_TO_HOUR) {
+      spk_tone(ALARM_TONE_HZ);
+      chime_until_ms = millis() + CHIME_MS;
+    }
+#endif
 
     int h12 = t.tm_hour % 12;
     if (h12 == 0) h12 = 12;
