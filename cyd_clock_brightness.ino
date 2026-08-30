@@ -18,7 +18,8 @@
       - ambient auto-brightness from the CYD's LDR on GPIO 34; the slider
         sets the ceiling, darkness dims toward BL_AUTO_MIN_PCT of it
       - analog face (lv_scale dial + line needles) with a compact info
-        column; swipe left/right to switch faces, choice kept in NVS
+        column, and a monthly calendar face (holiday-aware, today
+        highlighted); swipe left/right to cycle faces, choice kept in NVS
       - background color selectable from swatches on the brightness panel
         (white / ivory / dark gray / black, THEMES table, kept in NVS)
       - every field has a fixed width so nothing shifts when the digits change
@@ -346,9 +347,15 @@ static lv_obj_t * label_lunar_pre;   // "음" / "음 윤"
 static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
 static lv_obj_t * label_lunar_term;  // current solar term
 
-// The two faces are full-screen sibling containers; exactly one is visible.
+// The faces are full-screen sibling containers; exactly one is visible.
+// Swiping cycles digital -> analog -> calendar -> digital.
+#define FACE_COUNT 3
 static lv_obj_t * face_digital;
 static lv_obj_t * face_analog;
+static lv_obj_t * face_cal;
+static lv_obj_t * label_c_title;      // "2026.8"
+static lv_obj_t * label_c_wd[7];      // 일..토 header
+static lv_obj_t * label_c_day[42];    // 6 rows x 7 columns
 static lv_obj_t * a_scale;
 static lv_obj_t * a_needle_h;
 static lv_obj_t * a_needle_m;
@@ -494,6 +501,69 @@ static void bl_slider_cb(lv_event_t * e) {
   bl_last_touch_ms = millis();
 }
 
+static bool theme_is_dark(void) {
+  uint32_t bg = THEMES[theme_idx].bg;
+  uint32_t r = (bg >> 16) & 0xFF, g = (bg >> 8) & 0xFF, b = bg & 0xFF;
+  return (299 * r + 587 * g + 114 * b) / 1000 < 128;
+}
+
+// Repaint the calendar face for the given day: month title, weekday header
+// and the 6x7 day grid. Sundays and public holidays are red, Saturdays
+// blue, today sits on an orange pad with white text. Colors are picked per
+// theme lightness, so this also runs when the theme changes.
+static void cal_refresh(const struct tm * t) {
+  if (!face_cal) return;
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%04d.%d", t->tm_year + 1900, t->tm_mon + 1);
+  lv_label_set_text(label_c_title, buf);
+
+  lv_color_t ink  = lv_color_hex(THEMES[theme_idx].dial_major);
+  lv_color_t red  = lv_color_hex(theme_is_dark() ? 0xFF5544 : 0xE60000);
+  lv_color_t blue = lv_color_hex(theme_is_dark() ? 0x86B7F5 : 0x2B6CB0);
+
+  for (int i = 0; i < 7; i++) {
+    lv_obj_set_style_text_color(label_c_wd[i],
+        i == 0 ? red : (i == 6 ? blue : ink), 0);
+  }
+
+  static const int MDAYS[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  int y = t->tm_year + 1900;
+  int dim = MDAYS[t->tm_mon];
+  if (t->tm_mon == 1 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) dim = 29;
+  int first_wd = (t->tm_wday - ((t->tm_mday - 1) % 7) + 7) % 7;
+
+  for (int i = 0; i < 42; i++) {
+    int d = i - first_wd + 1;
+    if (d < 1 || d > dim) {
+      lv_label_set_text(label_c_day[i], "");
+      lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_TRANSP, 0);
+      continue;
+    }
+    char db[4];
+    snprintf(db, sizeof(db), "%d", d);
+    lv_label_set_text(label_c_day[i], db);
+    if (d == t->tm_mday) {
+      lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_COVER, 0);
+      lv_obj_set_style_text_color(label_c_day[i], lv_color_hex(0xFFFFFF), 0);
+    } else {
+      uint32_t ymd = (uint32_t)y * 10000u + (uint32_t)(t->tm_mon + 1) * 100u + (uint32_t)d;
+      int wd = i % 7;
+      lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_TRANSP, 0);
+      lv_obj_set_style_text_color(label_c_day[i],
+          (wd == 0 || kr_holiday_name(ymd)) ? red : (wd == 6 ? blue : ink), 0);
+    }
+  }
+}
+
+static void cal_refresh_now(void) {
+  if (!face_cal) return;
+  time_t now = time(nullptr);
+  struct tm t;
+  localtime_r(&now, &t);
+  cal_refresh(&t);
+}
+
 // Repaint everything whose color belongs to the theme. Safe to call before
 // the analog face exists (during boot only the background matters).
 static void theme_apply(void) {
@@ -506,15 +576,14 @@ static void theme_apply(void) {
     lv_obj_set_style_line_color(a_needle_h, lv_color_hex(th->needle_hm), 0);
     lv_obj_set_style_line_color(a_needle_m, lv_color_hex(th->needle_hm), 0);
   }
+  cal_refresh_now();   // calendar ink is theme-dependent
 }
 
 static void face_apply(void) {
-  if (face_mode == 0) {
-    lv_obj_remove_flag(face_digital, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(face_analog, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(face_digital, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(face_analog, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t * faces[FACE_COUNT] = { face_digital, face_analog, face_cal };
+  for (int i = 0; i < FACE_COUNT; i++) {
+    if (i == face_mode) lv_obj_remove_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
+    else                lv_obj_add_flag(faces[i], LV_OBJ_FLAG_HIDDEN);
   }
 }
 
@@ -608,7 +677,9 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       int32_t dv = last_x - press_x;
       if (LV_ABS(dh) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dh) > 2 * LV_ABS(dv)) {
         last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
-        face_mode = !face_mode;
+        // dh > 0 is a rightward swipe on screen (screen x = native y).
+        // Swipe left -> next face, swipe right -> previous face.
+        face_mode = (face_mode + (dh < 0 ? 1 : FACE_COUNT - 1)) % FACE_COUNT;
         face_apply();
         prefs.putInt("face", face_mode);
       }
@@ -726,6 +797,8 @@ static void timer_cb(lv_timer_t * timer) {
 
     snprintf(buf, sizeof(buf), "%02d-%02d", t.tm_mon + 1, t.tm_mday);
     lv_label_set_text(label_a_date, buf);
+
+    cal_refresh(&t);
 
     // Bottom line: [holiday/festival name] 음 7.11  입추.
     // Hidden labels are skipped by the flex row, so empty parts leave no gap.
@@ -997,6 +1070,42 @@ static void create_analog_face(void) {
   theme_apply();   // paint the dial and needles for the restored theme
 }
 
+// ============ Calendar face: month title, 일..토 header, 6x7 day grid =====
+// Static layout only - all texts and colors are filled by cal_refresh().
+static void create_calendar_face(void) {
+  face_cal = make_box(lv_screen_active());
+  lv_obj_set_size(face_cal, lv_pct(100), lv_pct(100));
+
+  label_c_title = lv_label_create(face_cal);
+  lv_label_set_text(label_c_title, "");
+  lv_obj_set_style_text_font(label_c_title, FONT_LUNAR_NUM, 0);   // DSEG with '.'
+  lv_obj_align(label_c_title, LV_ALIGN_TOP_MID, 0, 2);
+
+  for (int i = 0; i < 7; i++) {
+    label_c_wd[i] = lv_label_create(face_cal);
+    lv_label_set_text(label_c_wd[i], WEEKDAY_KR[i]);
+    lv_obj_set_style_text_font(label_c_wd[i], FONT_KR, 0);
+    lv_obj_set_width(label_c_wd[i], 45);
+    lv_obj_set_style_text_align(label_c_wd[i], LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(label_c_wd[i], 2 + i * 45, 32);
+  }
+
+  for (int i = 0; i < 42; i++) {
+    lv_obj_t * l = lv_label_create(face_cal);
+    lv_label_set_text(l, "");
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+    lv_obj_set_width(l, 41);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(l, 4 + (i % 7) * 45, 60 + (i / 7) * 29);
+    // today's pad; kept transparent on every other day
+    lv_obj_set_style_radius(l, 6, 0);
+    lv_obj_set_style_bg_color(l, lv_color_hex(0xFF3300), 0);
+    lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_ver(l, 2, 0);
+    label_c_day[i] = l;
+  }
+}
+
 void lv_create_main_gui(void) {
 
   // 테마 배경 + 주황 세그먼트
@@ -1188,6 +1297,7 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_pad_left(label_lunar_term, 6, 0);
 
   create_analog_face();
+  create_calendar_face();
   face_apply();         // show the face restored from NVS
 
   create_brightness_panel();
@@ -1275,6 +1385,7 @@ void setup() {
   bl_pct = prefs.getInt("bl", BL_DEFAULT);
   bl_saved_pct = bl_pct;
   face_mode = prefs.getInt("face", 0);
+  if (face_mode < 0 || face_mode >= FACE_COUNT) face_mode = 0;
   theme_idx = prefs.getInt("theme", 0);
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
 
