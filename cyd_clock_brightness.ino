@@ -17,8 +17,10 @@
         forever instead of hanging on a black screen
       - ambient auto-brightness from the CYD's LDR on GPIO 34; the slider
         sets the ceiling, darkness dims toward BL_AUTO_MIN_PCT of it
-      - analog face (lv_scale dial + line needles, raised bezel with drop
-        shadow and needle shadows for depth) with a compact info
+      - a consistent raised, top-lit look on every face: bezel + shadows
+        on the analog dial, a card plate behind the digital / calendar /
+        stopwatch / timer content, embossed HH:MM, raised buttons
+      - analog face (lv_scale dial + line needles) with a compact info
         column, and a monthly calendar face (holiday-aware, today
         highlighted); swipe left/right to cycle faces, choice kept in NVS
       - stopwatch and countdown-timer faces; the timer rings the CYD's
@@ -305,19 +307,26 @@ static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "�
 #define ANALOG_MIN_LEN    68
 #define ANALOG_SEC_LEN    78
 
-// Raised look: a bezel ring lit from the top (light -> dark vertical
-// gradient) with a soft drop shadow toward the bottom-right, a face with
-// the opposite gradient so it reads as slightly inset below the rim, and
-// offset shadow copies of the needles and cap. Radial gradients are not
-// enabled in this LVGL build, so everything is linear + shadow.
+// ======================= Depth / 3-D look ================================
+// Every face uses the same lighting: light from the top, shadows falling
+// to the bottom-right. Raised elements (the analog bezel, the card behind
+// each face's content, buttons, the brightness panel) get a light-to-dark
+// vertical gradient plus a soft drop shadow; the analog face and the
+// digital HH:MM get offset shadow copies for extra relief. Radial
+// gradients are not enabled in this LVGL build, so it is all linear +
+// shadow. Card and bezel tones derive from the theme background in
+// theme_apply(), so the relief looks like raised panel material on every
+// theme.
+#define DEPTH_SHADOW_W        22   // drop shadow blur for large plates
+#define DEPTH_SHADOW_OFS_X    4
+#define DEPTH_SHADOW_OFS_Y    8
+#define DEPTH_SHADOW_OPA      LV_OPA_50
+#define CARD_RADIUS           16
 #define ANALOG_BEZEL_W        7    // ring width beyond the dial radius
-#define ANALOG_SHADOW_W       22   // drop shadow blur
-#define ANALOG_SHADOW_OFS_X   4
-#define ANALOG_SHADOW_OFS_Y   8
-#define ANALOG_SHADOW_OPA     LV_OPA_50
-#define NEEDLE_SHADOW_OFS_X   3
+#define NEEDLE_SHADOW_OFS_X   3    // also used for the HH:MM emboss
 #define NEEDLE_SHADOW_OFS_Y   4
 #define NEEDLE_SHADOW_OPA     LV_OPA_40
+#define MAX_CARDS             4
 
 // ======================= Background themes ================================
 // A row of swatches on the brightness panel picks the background color; the
@@ -363,6 +372,9 @@ static lv_obj_t * label_sec;
 static lv_obj_t * label_datenum;
 static lv_obj_t * label_wd;
 static lv_obj_t * hm_box;            // HH:MM cell, resized on the 12/24 h toggle
+static lv_obj_t * label_hm_sh;       // emboss shadow under HH:MM
+static lv_obj_t * cards[MAX_CARDS];  // raised plates behind face content
+static int        card_count = 0;
 static lv_obj_t * label_ghost;       // ghost "88:88" (SHOW_GHOST_SEGMENTS) or NULL
 static lv_obj_t * lbl_h24;           // "12H" / "24H" on the brightness panel
 static bool       h24 = false;       // 24-hour format (kept in NVS)
@@ -644,6 +656,7 @@ static void cal_refresh(const struct tm * t) {
     if (d < 1 || d > dim) {
       lv_label_set_text(label_c_day[i], "");
       lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_TRANSP, 0);
+      lv_obj_set_style_shadow_opa(label_c_day[i], LV_OPA_TRANSP, 0);
       continue;
     }
     char db[4];
@@ -651,11 +664,13 @@ static void cal_refresh(const struct tm * t) {
     lv_label_set_text(label_c_day[i], db);
     if (this_month && d == t->tm_mday) {
       lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_COVER, 0);
+      lv_obj_set_style_shadow_opa(label_c_day[i], LV_OPA_40, 0);
       lv_obj_set_style_text_color(label_c_day[i], lv_color_hex(0xFFFFFF), 0);
     } else {
       uint32_t ymd = (uint32_t)y * 10000u + (uint32_t)(mon + 1) * 100u + (uint32_t)d;
       int wd = i % 7;
       lv_obj_set_style_bg_opa(label_c_day[i], LV_OPA_TRANSP, 0);
+      lv_obj_set_style_shadow_opa(label_c_day[i], LV_OPA_TRANSP, 0);
       lv_obj_set_style_text_color(label_c_day[i],
           (wd == 0 || kr_holiday_name(ymd)) ? red : (wd == 6 ? blue : ink), 0);
     }
@@ -698,6 +713,18 @@ static void theme_apply(void) {
     lv_obj_set_style_bg_color(a_face, lv_color_darken(face_c, dark ? 20 : 12), 0);
     lv_obj_set_style_bg_grad_color(a_face, lv_color_lighten(face_c, dark ? 10 : 20), 0);
     lv_obj_set_style_shadow_color(a_bezel, lv_color_black(), 0);
+  }
+
+  // Cards behind the other faces: same material as the panel, raised.
+  {
+    lv_color_t bg = lv_color_hex(th->bg);
+    bool dark = theme_is_dark();
+    lv_color_t hi = lv_color_lighten(bg, dark ? 40 : 30);
+    lv_color_t lo = lv_color_darken(bg,  dark ? 25 : 30);
+    for (int i = 0; i < card_count; i++) {
+      lv_obj_set_style_bg_color(cards[i], hi, 0);
+      lv_obj_set_style_bg_grad_color(cards[i], lo, 0);
+    }
   }
   cal_refresh_now();   // calendar ink is theme-dependent
 }
@@ -1019,6 +1046,26 @@ static lv_obj_t * make_box(lv_obj_t * parent) {
   lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE);
   return o;
 }
+
+// Raised card: a rounded plate lit from the top with a drop shadow. Create
+// it before the content it sits under; theme_apply() colors it.
+static lv_obj_t * make_card(lv_obj_t * parent, int32_t w, int32_t h,
+                            lv_align_t align, int32_t x, int32_t y,
+                            int32_t shadow_w) {
+  lv_obj_t * c = make_box(parent);
+  lv_obj_set_size(c, w, h);
+  lv_obj_align(c, align, x, y);
+  lv_obj_set_style_radius(c, CARD_RADIUS, 0);
+  lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_grad_dir(c, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_shadow_width(c, shadow_w, 0);
+  lv_obj_set_style_shadow_offset_x(c, DEPTH_SHADOW_OFS_X, 0);
+  lv_obj_set_style_shadow_offset_y(c, DEPTH_SHADOW_OFS_Y, 0);
+  lv_obj_set_style_shadow_opa(c, DEPTH_SHADOW_OPA, 0);
+  lv_obj_set_style_shadow_color(c, lv_color_black(), 0);
+  if (card_count < MAX_CARDS) cards[card_count++] = c;
+  return c;
+}
 // -------------------------------------------------------------------------
 
 static void timer_cb(lv_timer_t * timer) {
@@ -1086,6 +1133,7 @@ static void timer_cb(lv_timer_t * timer) {
     if (h24) {
       snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
       lv_label_set_text(label_hm, buf);
+      lv_label_set_text(label_hm_sh, buf);
       // Empty (not hidden) so the seconds keep their bottom slot in the
       // SPACE_BETWEEN column.
       lv_label_set_text(label_ampm, "");
@@ -1094,6 +1142,7 @@ static void timer_cb(lv_timer_t * timer) {
       if (h12 == 0) h12 = 12;
       snprintf(buf, sizeof(buf), "%d:%02d", h12, t.tm_min);
       lv_label_set_text(label_hm, buf);
+      lv_label_set_text(label_hm_sh, buf);
       lv_label_set_text(label_ampm, ampm);
     }
   }
@@ -1199,6 +1248,7 @@ static void time_fmt_apply(void) {
   int32_t w = h24 ? w_hm_24 : w_hm_12;
   lv_obj_set_width(hm_box, w);
   lv_obj_set_width(label_hm, w);
+  lv_obj_set_width(label_hm_sh, w);
   if (label_ghost) lv_obj_set_width(label_ghost, w);
   if (lbl_h24) lv_label_set_text(lbl_h24, h24 ? "24H" : "12H");
   time_fmt_dirty = true;   // timer_cb re-renders the hour on its next tick
@@ -1242,6 +1292,10 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_border_color(bl_panel, lv_color_hex(0x555555), 0);
   lv_obj_set_style_border_width(bl_panel, 1, 0);
   lv_obj_set_style_radius(bl_panel, 8, 0);
+  lv_obj_set_style_shadow_width(bl_panel, 20, 0);
+  lv_obj_set_style_shadow_offset_y(bl_panel, 6, 0);
+  lv_obj_set_style_shadow_opa(bl_panel, LV_OPA_60, 0);
+  lv_obj_set_style_shadow_color(bl_panel, lv_color_black(), 0);
   lv_obj_set_style_pad_all(bl_panel, 8, 0);
   lv_obj_add_event_cb(bl_panel, bl_panel_press_cb, LV_EVENT_PRESSED, NULL);
 
@@ -1308,10 +1362,10 @@ static void create_analog_face(void) {
   lv_obj_set_style_radius(a_bezel, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_opa(a_bezel, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_grad_dir(a_bezel, LV_GRAD_DIR_VER, 0);
-  lv_obj_set_style_shadow_width(a_bezel, ANALOG_SHADOW_W, 0);
-  lv_obj_set_style_shadow_offset_x(a_bezel, ANALOG_SHADOW_OFS_X, 0);
-  lv_obj_set_style_shadow_offset_y(a_bezel, ANALOG_SHADOW_OFS_Y, 0);
-  lv_obj_set_style_shadow_opa(a_bezel, ANALOG_SHADOW_OPA, 0);
+  lv_obj_set_style_shadow_width(a_bezel, DEPTH_SHADOW_W, 0);
+  lv_obj_set_style_shadow_offset_x(a_bezel, DEPTH_SHADOW_OFS_X, 0);
+  lv_obj_set_style_shadow_offset_y(a_bezel, DEPTH_SHADOW_OFS_Y, 0);
+  lv_obj_set_style_shadow_opa(a_bezel, DEPTH_SHADOW_OPA, 0);
 
   a_face = lv_obj_create(face_analog);
   lv_obj_remove_style_all(a_face);
@@ -1469,6 +1523,8 @@ static void create_analog_face(void) {
 static void create_calendar_face(void) {
   face_cal = make_box(lv_screen_active());
   lv_obj_set_size(face_cal, lv_pct(100), lv_pct(100));
+  // Near-full-screen plate; a lighter shadow since it is mostly clipped
+  make_card(face_cal, 312, 232, LV_ALIGN_CENTER, 0, 0, 12);
 
   label_c_title = lv_label_create(face_cal);
   lv_label_set_text(label_c_title, "");
@@ -1496,6 +1552,12 @@ static void create_calendar_face(void) {
     lv_obj_set_style_bg_color(l, lv_color_hex(0xFF3300), 0);
     lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_ver(l, 2, 0);
+    // the pad's own shadow, enabled together with the pad in cal_refresh()
+    lv_obj_set_style_shadow_width(l, 8, 0);
+    lv_obj_set_style_shadow_offset_x(l, 1, 0);
+    lv_obj_set_style_shadow_offset_y(l, 3, 0);
+    lv_obj_set_style_shadow_color(l, lv_color_black(), 0);
+    lv_obj_set_style_shadow_opa(l, LV_OPA_TRANSP, 0);
     label_c_day[i] = l;
   }
 }
@@ -1507,6 +1569,15 @@ static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
   lv_obj_t * b = lv_button_create(parent);
   lv_obj_set_size(b, w, h);
   lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user_data);
+  // Raised: theme color on top fading darker, plus a drop shadow
+  lv_color_t base = lv_obj_get_style_bg_color(b, LV_PART_MAIN);
+  lv_obj_set_style_bg_grad_color(b, lv_color_darken(base, 60), 0);
+  lv_obj_set_style_bg_grad_dir(b, LV_GRAD_DIR_VER, 0);
+  lv_obj_set_style_shadow_width(b, 10, 0);
+  lv_obj_set_style_shadow_offset_x(b, 2, 0);
+  lv_obj_set_style_shadow_offset_y(b, 4, 0);
+  lv_obj_set_style_shadow_opa(b, LV_OPA_40, 0);
+  lv_obj_set_style_shadow_color(b, lv_color_black(), 0);
   lv_obj_t * l = lv_label_create(b);
   lv_label_set_text(l, txt);
   lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
@@ -1518,6 +1589,7 @@ static lv_obj_t * make_button(lv_obj_t * parent, const char * txt,
 static void create_stopwatch_face(void) {
   face_sw = make_box(lv_screen_active());
   lv_obj_set_size(face_sw, lv_pct(100), lv_pct(100));
+  make_card(face_sw, 300, 104, LV_ALIGN_CENTER, 0, -34, DEPTH_SHADOW_W);  // display window
 
   lv_obj_t * row = make_box(face_sw);
   lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -1546,6 +1618,7 @@ static void create_stopwatch_face(void) {
 static void create_timer_face(void) {
   face_tm = make_box(lv_screen_active());
   lv_obj_set_size(face_tm, lv_pct(100), lv_pct(100));
+  make_card(face_tm, 300, 96, LV_ALIGN_CENTER, 0, -46, DEPTH_SHADOW_W);   // display window
 
   label_tm_time = lv_label_create(face_tm);
   lv_label_set_text(label_tm_time, "00:00");
@@ -1580,6 +1653,8 @@ void lv_create_main_gui(void) {
   // flip swaps the whole face.
   face_digital = make_box(lv_screen_active());
   lv_obj_set_size(face_digital, lv_pct(100), lv_pct(100));
+  // Plate under the three rows (content spans y 28..212 -> 14..226 plate)
+  make_card(face_digital, 312, 212, LV_ALIGN_CENTER, 0, 0, DEPTH_SHADOW_W);
 
   // ---- Styles
   static lv_style_t style_time;
@@ -1688,6 +1763,19 @@ void lv_create_main_gui(void) {
   lv_label_set_long_mode(label_ghost, LV_LABEL_LONG_CLIP);
   lv_obj_center(label_ghost);
 #endif
+
+  // Emboss: a translucent black copy of HH:MM, offset down-right, under it
+  label_hm_sh = lv_label_create(hm_box);
+  lv_label_set_text(label_hm_sh, "12:00");
+  lv_obj_add_style(label_hm_sh, &style_time, 0);
+  lv_obj_set_width(label_hm_sh, w_hm);
+  lv_obj_set_style_text_align(label_hm_sh, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_label_set_long_mode(label_hm_sh, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_color(label_hm_sh, lv_color_black(), 0);
+  lv_obj_set_style_text_opa(label_hm_sh, LV_OPA_30, 0);
+  lv_obj_set_style_translate_x(label_hm_sh, NEEDLE_SHADOW_OFS_X, 0);
+  lv_obj_set_style_translate_y(label_hm_sh, NEEDLE_SHADOW_OFS_Y, 0);
+  lv_obj_center(label_hm_sh);
 
   label_hm = lv_label_create(hm_box);
   lv_label_set_text(label_hm, "12:00");
