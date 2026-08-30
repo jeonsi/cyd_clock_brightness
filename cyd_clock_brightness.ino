@@ -1752,7 +1752,7 @@ void setup() {
 #endif
 
 #if SPK_TEST
-  Serial.println("Speaker test: 500 / 1000 / 2000 / 3000 Hz, 1 s each");
+  Serial.println("Speaker test 1: LEDC tones 500/1000/2000/3000 Hz, 1 s each");
   static const uint32_t TEST_HZ[4] = { 500, 1000, 2000, 3000 };
   for (int i = 0; i < 4; i++) {
     Serial.printf("  tone %lu Hz\n", (unsigned long)TEST_HZ[i]);
@@ -1760,6 +1760,34 @@ void setup() {
     delay(1000);
   }
   spk_tone(0);
+
+  // Phase 2 drives the DAC directly (GPIO 26 is DAC2), bypassing LEDC and
+  // the GPIO matrix. Sound here but not in phase 1 -> LEDC setup problem;
+  // silence in both with verified wiring -> the on-board 8002 amp or its
+  // power is the suspect.
+  Serial.println("Speaker test 2: DAC square wave 1 kHz, 2 s");
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcDetach(SPK_PIN);
+#else
+  ledcDetachPin(SPK_PIN);
+#endif
+  for (int i = 0; i < 2000; i++) {
+    dacWrite(SPK_PIN, 255);
+    delayMicroseconds(500);
+    dacWrite(SPK_PIN, 0);
+    delayMicroseconds(500);
+  }
+  dacWrite(SPK_PIN, 0);
+  Serial.println("Speaker test done");
+
+  // Give the pin back to LEDC for the alarm/chime
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcAttachChannel(SPK_PIN, ALARM_TONE_HZ, 10, SPK_CHANNEL);
+  ledcWriteTone(SPK_PIN, 0);
+#else
+  ledcAttachPin(SPK_PIN, SPK_CHANNEL);
+  ledcWriteTone(SPK_CHANNEL, 0);
+#endif
 #endif
 
 #if BOOT_BEEP
