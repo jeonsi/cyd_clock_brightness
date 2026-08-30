@@ -78,9 +78,12 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define FONT_DATENUM  &font_dseg_26        // date digits
 #define FONT_KR       &font_kr_26          // weekday
 #define FONT_AMPM     &lv_font_montserrat_20   // must be enabled in lv_conf.h
-#define FONT_LUNAR    &font_kr_lunar_22    // lunar date + solar term line
+#define FONT_LUNAR      &font_kr_lunar_22     // "음"/"윤" prefix + solar term
+#define FONT_LUNAR_NUM  &font_dseg_lunar_26   // lunar date digits, DSEG like the solar date
 
-#define LUNAR_COLOR   lv_color_hex(0x777777)
+// Same orange as the solar date digits. Point this at a gray (e.g. 0x777777)
+// to demote the line to secondary information.
+#define LUNAR_COLOR   lv_color_hex(0xFF3300)
 
 #define SHOW_GHOST_SEGMENTS 0
 #define GHOST_COLOR lv_color_hex(0xDDDDDD)
@@ -244,7 +247,9 @@ static lv_obj_t * label_hm;
 static lv_obj_t * label_sec;
 static lv_obj_t * label_datenum;
 static lv_obj_t * label_wd;
-static lv_obj_t * label_lunar;
+static lv_obj_t * label_lunar_pre;   // "음" / "음 윤"
+static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
+static lv_obj_t * label_lunar_term;  // current solar term
 
 static lv_obj_t * bl_panel;
 static lv_obj_t * bl_slider;
@@ -485,15 +490,16 @@ static void timer_cb(lv_timer_t * timer) {
     // Either part is dropped silently once its table runs out of years.
     klc_date_t ld;
     const char * term = kst_current_term(&t);
-    char lbuf[48];
     if (klc_solar_to_lunar(&t, &ld)) {
-      snprintf(lbuf, sizeof(lbuf), "음 %s%d.%d%s%s",
-               ld.leap ? "윤" : "", ld.month, ld.day,
-               term ? "  " : "", term ? term : "");
+      char nbuf[12];
+      lv_label_set_text(label_lunar_pre, ld.leap ? "음 윤" : "음");
+      snprintf(nbuf, sizeof(nbuf), "%d.%d", ld.month, ld.day);
+      lv_label_set_text(label_lunar_num, nbuf);
     } else {
-      snprintf(lbuf, sizeof(lbuf), "%s", term ? term : "");
+      lv_label_set_text(label_lunar_pre, "");
+      lv_label_set_text(label_lunar_num, "");
     }
-    lv_label_set_text(label_lunar, lbuf);
+    lv_label_set_text(label_lunar_term, term ? term : "");
   }
 
   // Hide the brightness panel once the user stops touching it
@@ -593,10 +599,10 @@ void lv_create_main_gui(void) {
   lv_obj_t * date_row = make_box(lv_screen_active());
   lv_obj_set_size(date_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   // Row offsets place the whole block (date / time / lunar line) with equal
-  // top and bottom margins: content spans y 30..209 on the 240 px panel,
-  // ~31 px of margin on each side. Derived from the font line heights
-  // (date 27, time 69, lunar 22) with the inter-row gaps kept as designed.
-  lv_obj_align(date_row, LV_ALIGN_CENTER, 0, -76);
+  // top and bottom margins: content spans y 28..212 on the 240 px panel,
+  // ~28 px of margin on each side. Derived from the font line heights
+  // (date 27, time 69, lunar 27) with the inter-row gaps kept as designed.
+  lv_obj_align(date_row, LV_ALIGN_CENTER, 0, -78);
   lv_obj_set_flex_flow(date_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(date_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(date_row, 8, 0);
@@ -619,7 +625,7 @@ void lv_create_main_gui(void) {
   // ================= Time row: [ HH:MM ][ AM/PM over SS ] =================
   lv_obj_t * time_row = make_box(lv_screen_active());
   lv_obj_set_size(time_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(time_row, LV_ALIGN_CENTER, 0, 1);
+  lv_obj_align(time_row, LV_ALIGN_CENTER, 0, -1);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(time_row, 8, 0);
@@ -662,16 +668,40 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_text_align(label_sec, LV_TEXT_ALIGN_CENTER, 0);
   // lv_obj_set_style_text_color(label_sec, lv_color_hex(0x992000), 0);
 
-  // ================= Bottom line: 음력 날짜 + 절기 ====================
+  // ============ Bottom row: [ 음 ][ 7.11 ][ 입추 ] ====================
+  // Digits use the same DSEG face/size as the solar date; the Korean parts
+  // stay NanumGothic. Flex bottom-aligns the labels, then the Korean ones
+  // get the same baseline nudge treatment as the weekday.
   static lv_style_t style_lunar;
   lv_style_init(&style_lunar);
   lv_style_set_text_font(&style_lunar, FONT_LUNAR);
 
-  label_lunar = lv_label_create(lv_screen_active());
-  lv_label_set_text(label_lunar, "");
-  lv_obj_add_style(label_lunar, &style_lunar, 0);
-  lv_obj_set_style_text_color(label_lunar, LUNAR_COLOR, 0);
-  lv_obj_align(label_lunar, LV_ALIGN_BOTTOM_MID, 0, -31);
+  static lv_style_t style_lunar_num;
+  lv_style_init(&style_lunar_num);
+  lv_style_set_text_font(&style_lunar_num, FONT_LUNAR_NUM);
+
+  lv_obj_t * lunar_row = make_box(lv_screen_active());
+  lv_obj_set_size(lunar_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_align(lunar_row, LV_ALIGN_BOTTOM_MID, 0, -28);
+  lv_obj_set_flex_flow(lunar_row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(lunar_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_column(lunar_row, 8, 0);
+  lv_obj_set_style_text_color(lunar_row, LUNAR_COLOR, 0);
+
+  label_lunar_pre = lv_label_create(lunar_row);
+  lv_label_set_text(label_lunar_pre, "");
+  lv_obj_add_style(label_lunar_pre, &style_lunar, 0);
+  lv_obj_set_style_translate_y(label_lunar_pre, 3, 0);
+
+  label_lunar_num = lv_label_create(lunar_row);
+  lv_label_set_text(label_lunar_num, "");
+  lv_obj_add_style(label_lunar_num, &style_lunar_num, 0);
+
+  label_lunar_term = lv_label_create(lunar_row);
+  lv_label_set_text(label_lunar_term, "");
+  lv_obj_add_style(label_lunar_term, &style_lunar, 0);
+  lv_obj_set_style_translate_y(label_lunar_term, 3, 0);
+  lv_obj_set_style_pad_left(label_lunar_term, 6, 0);
 
   create_brightness_panel();
   bl_set_pct(bl_pct);   // syncs the label with the restored value
