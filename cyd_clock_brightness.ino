@@ -324,7 +324,6 @@ static lv_obj_t * a_needle_m_sh;
 static lv_obj_t * a_needle_s_sh;
 
 static int      face_mode = 0;        // 0 = digital, 1 = analog (kept in NVS)
-static uint32_t last_gesture_ms = 0;
 static int      theme_idx = 0;        // index into THEMES (kept in NVS)
 static lv_obj_t * theme_btns[THEME_COUNT];
 
@@ -830,23 +829,6 @@ static void sw_tm_tick(void) {
   // (the running stopwatch display is repainted by sw_fast_timer)
 }
 
-// A tap anywhere on the clock face toggles the panel: open when hidden,
-// and - after an accidental tap - a second tap outside the panel dismisses
-// it immediately instead of waiting out the 4 s timeout. Taps ON the panel
-// only keep it alive (bl_panel_press_cb). Swipes are detected in
-// touchscreen_read() (which stamps last_gesture_ms before this fires), so
-// the CLICKED at the end of a swipe is filtered out here.
-static void screen_click_cb(lv_event_t * e) {
-  LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
-  if (face_mode == FACE_ALARM) return;   // editing screen: background taps do nothing
-  if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN)) {
-    bl_panel_hide();
-  } else {
-    bl_panel_show();
-  }
-}
-
 // Pressing the panel background (not the slider) just keeps it alive
 static void bl_panel_press_cb(lv_event_t * e) {
   LV_UNUSED(e);
@@ -1058,10 +1040,18 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     bool was_pressed = pressed;
     bool was_blip    = (!pressed && confirm_left >= 0);
     const char * verdict = on_widget ? "WIDGET click/drag (no gesture test)" : "TAP";
-    if (pressed && !swipe_armed) verdict = "TAP/DRAG (gestures off: panel open)";
 #endif
 
-    if (pressed && swipe_armed && face_digital && !on_widget) {
+    if (pressed && face_digital && !on_widget && !swipe_armed) {
+      // Brightness panel open: gestures are off, and any release on the
+      // background (outside the panel) dismisses it - a second tap after an
+      // accidental one closes it at once instead of waiting out the timeout.
+      bl_panel_hide();
+#if TOUCH_DEBUG
+      verdict = "TAP outside the panel -> panel closed";
+#endif
+    }
+    else if (pressed && face_digital && !on_widget) {
       // Release edge. The display is rotated 270 degrees, so
       // screen-horizontal movement is the native Y axis. Three outcomes:
       //   swipe    : raw peak travel >= TOUCH_SWIPE_MIN_PX, or a flick - moving
@@ -1072,7 +1062,7 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       //   ambiguous: not a swipe, yet moved too far (filtered peak >=
       //              TOUCH_TAP_MAX_PX) or too fast for a tap -> neither. A slow
       //              slide off a button must not become a tap or a swipe.
-      //   otherwise: tap (LVGL's CLICKED goes through)
+      //   otherwise: tap -> open the brightness panel (not on the alarm face)
       // Raw travel for the swipe test so fast flicks are not understated;
       // filtered travel for the tap test so spikes do not swallow taps.
       int32_t dh = peak_dh;
@@ -1081,7 +1071,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       bool by_distance = (travel >= TOUCH_SWIPE_MIN_PX);
       bool by_flick    = (max_step >= TOUCH_MOVE_STEP_PX && travel >= TOUCH_SWIPE_MIN_PX / 2);
       if (by_distance || by_flick) {
-        last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
 #if TOUCH_DEBUG
         verdict = (LV_ABS(dh) < LV_ABS(dv)) ? (by_distance ? "SWIPE vertical (no action)" : "SWIPE vertical by flick (no action)")
                 : (dh < 0) ? (by_distance ? "SWIPE left -> next face" : "SWIPE left by flick -> next face")
@@ -1105,9 +1094,19 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
         // Ambiguous: moved too much or too fast for a tap, but not a swipe
         // either (a slow slide, or a flick that stayed very short). Swallow
         // the click, do nothing.
-        last_gesture_ms = millis();
 #if TOUCH_DEBUG
         verdict = "IGNORED: moved/too fast for a tap but short of a swipe";
+#endif
+      }
+      else {
+        // A tap on the background. The alarm face is an editing screen where
+        // stray taps must do nothing; everywhere else it opens the panel.
+        // LVGL's own CLICKED on the screen is not used for this - the
+        // driver already knows this release was a tap and not a gesture.
+        if (face_mode != FACE_ALARM) bl_panel_show();
+#if TOUCH_DEBUG
+        verdict = (face_mode != FACE_ALARM) ? "TAP -> brightness panel opened"
+                                            : "TAP on the alarm face (ignored)";
 #endif
       }
     }
@@ -2039,7 +2038,6 @@ void lv_create_main_gui(void) {
   // start a scroll and cancel the button's click (PRESS_LOST). Nothing here
   // scrolls, so turn it off.
   lv_obj_remove_flag(lv_screen_active(), LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_add_event_cb(lv_screen_active(), screen_click_cb, LV_EVENT_CLICKED, NULL);
 
   // Everything of the digital face hangs off this container so one flag
   // flip swaps the whole face.
