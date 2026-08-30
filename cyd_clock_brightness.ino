@@ -151,13 +151,16 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define XPT2046_CLK  25
 #define XPT2046_CS   33
 
-// Measured on this panel with TOUCH_DEBUG: the corners land at roughly
-// raw x 620..3440 and raw y 500..3600. Tightening the range from the generic
-// defaults is what lets the slider actually reach 5% and 100%.
-#define TOUCH_RAW_MIN_X 620
-#define TOUCH_RAW_MAX_X 3440
-#define TOUCH_RAW_MIN_Y 500
-#define TOUCH_RAW_MAX_Y 3600
+// Measured on this panel with TOUCH_DEBUG and a stylus at the four screen
+// corners, using the raw driver below (the old library's interleaved
+// sampling read a noticeably different range - recalibrate after any
+// change to the sampling scheme):
+//   top    rx ~326/303   bottom rx ~3836/3837
+//   left   ry ~3717/3719 right  ry ~170/138
+#define TOUCH_RAW_MIN_X 315
+#define TOUCH_RAW_MAX_X 3837
+#define TOUCH_RAW_MIN_Y 154
+#define TOUCH_RAW_MAX_Y 3718
 
 // IMPORTANT: LVGL 9 rotates pointer coordinates itself, inside
 // indev_pointer_proc(), to match the display rotation. The read callback must
@@ -168,14 +171,12 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define TOUCH_INVERT_Y 1
 
 // Constant offset correction, in native px, applied after the inversion
-// above. The raw driver samples differently from the old library (settled
-// consecutive reads instead of interleaved ones), which shifted the
-// effective calibration slightly. Native X maps to the SCREEN-VERTICAL axis
-// under the 270-degree rotation: if the pointer registers BELOW where you
-// actually touch (you must aim above a target to hit it), make TOUCH_TRIM_X
-// more positive; if it registers above, more negative. TOUCH_TRIM_Y is the
-// same idea for the screen-horizontal axis.
-#define TOUCH_TRIM_X 20
+// above. With the corner-measured TOUCH_RAW_* calibration these stay 0;
+// they remain as a quick fix for small drift. Native X maps to the
+// SCREEN-VERTICAL axis under the 270-degree rotation: if the pointer
+// registers BELOW where you actually touch, make TOUCH_TRIM_X more
+// positive; TOUCH_TRIM_Y is the same idea for the screen-horizontal axis.
+#define TOUCH_TRIM_X 0
 #define TOUCH_TRIM_Y 0
 
 // Momentary contact loss during a drag is common on a resistive panel. Hold
@@ -210,7 +211,7 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // Set to 1 to print raw + mapped touch coordinates on the serial monitor.
 // Note the mapped values are in the unrotated 240x320 space, so they will not
 // line up visually with where you pressed on the rotated screen.
-#define TOUCH_DEBUG 0
+#define TOUCH_DEBUG 1
 
 SPIClass touchscreenSPI = SPIClass(VSPI);
 
