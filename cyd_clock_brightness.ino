@@ -607,7 +607,20 @@ void lv_create_main_gui(void) {
   // DSEG is a monospaced seven-segment face, so these never change at runtime.
   // The bold face is wider than the regular one, and this picks that up
   // automatically - no constants to retune.
-  const int32_t w_hm    = 4 * max_digit_width(FONT_TIME) + glyph_width(FONT_TIME, ':') + 4;
+
+  // The hour field never shows 2-9 in its leading cell: 12-hour time runs
+  // 1:00-12:59, so the leading digit is either absent or a '1', whose ink
+  // (segments B and C) sits at the far right of its monospaced cell.
+  // Reserve only that ink instead of the whole cell, otherwise a one-digit
+  // hour leaves a dead zone on the left and the display looks pushed right.
+  // The label is right-aligned with LONG_CLIP, so at 10:00-12:59 only the
+  // blank left part of the '1' cell is clipped and nothing ever moves.
+  lv_font_glyph_dsc_t g1;
+  int32_t lead_blank = 0;
+  if (lv_font_get_glyph_dsc(FONT_TIME, &g1, '1', 0)) lead_blank = g1.ofs_x;
+
+  const int32_t w_hm    = 4 * max_digit_width(FONT_TIME) + glyph_width(FONT_TIME, ':') + 4
+                          - lead_blank;
   const int32_t w_sec   = 2 * max_digit_width(FONT_SEC) + 2;
   const int32_t w_ampm  = LV_MAX(text_width(FONT_AMPM, "AM"),
                                  text_width(FONT_AMPM, "PM")) + 2;
@@ -662,10 +675,16 @@ void lv_create_main_gui(void) {
   lv_obj_set_size(hm_box, w_hm, h_time);
 
 #if SHOW_GHOST_SEGMENTS
+  // Same width/align/clip as label_hm so the segments coincide. The blank
+  // lead-in of the first 8 gets clipped like the '1' cell above; its left
+  // segments (E/F) lose lead_blank pixels - acceptable for a ghost layer.
   lv_obj_t * label_ghost = lv_label_create(hm_box);
   lv_label_set_text(label_ghost, "88:88");
   lv_obj_add_style(label_ghost, &style_time, 0);
   lv_obj_set_style_text_color(label_ghost, GHOST_COLOR, 0);
+  lv_obj_set_width(label_ghost, w_hm);
+  lv_obj_set_style_text_align(label_ghost, LV_TEXT_ALIGN_RIGHT, 0);
+  lv_label_set_long_mode(label_ghost, LV_LABEL_LONG_CLIP);
   lv_obj_center(label_ghost);
 #endif
 
@@ -674,6 +693,9 @@ void lv_create_main_gui(void) {
   lv_obj_add_style(label_hm, &style_time, 0);
   lv_obj_set_width(label_hm, w_hm);
   lv_obj_set_style_text_align(label_hm, LV_TEXT_ALIGN_RIGHT, 0);
+  // "10:00".."12:59" is wider than w_hm by exactly the blank lead-in of the
+  // '1' cell; clip that instead of letting the label wrap to a second line.
+  lv_label_set_long_mode(label_hm, LV_LABEL_LONG_CLIP);
   lv_obj_center(label_hm);
 
   // Right column: AM/PM pinned to the top, seconds pinned to the bottom
