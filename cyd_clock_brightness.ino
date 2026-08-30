@@ -2256,7 +2256,12 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_bg_color(alarm_overlay, lv_color_hex(0xFF3300), 0);
   lv_obj_set_style_bg_opa(alarm_overlay, LV_OPA_30, 0);
   lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(alarm_overlay, alarm_overlay_cb, LV_EVENT_CLICKED, NULL);
+  // Stop on PRESSED, not CLICKED: a finger that wobbles more than LVGL's
+  // scroll limit (10 px) while touching would otherwise start an elastic
+  // scroll of the overlay and the click would never be delivered. The
+  // scroll flags go too, so the overlay can never become a scroll target.
+  lv_obj_remove_flag(alarm_overlay, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(alarm_overlay, alarm_overlay_cb, LV_EVENT_PRESSED, NULL);
   lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
 
   // 10 ticks per second: the stopwatch shows tenths, and the second
