@@ -311,17 +311,27 @@ typedef struct {
   uint32_t needle_hm;    // hour and minute needles
 } theme_t;
 
-// Spread across lightness AND hue: two light neutrals, two mid-light and
-// three mid-dark colors, one dark anchor. The dial ink follows each
-// background's tone; the orange segments read well on all of them.
+// Spread across lightness AND hue - a light row and a dark row of eight
+// each, matching the two swatch rows on the panel. The dial ink follows
+// each background's tone; the orange segments read well on all of them.
 static const theme_t THEMES[] = {
+  // lighter row
   { 0xFFFFFF, 0x444444, 0xBBBBBB, 0x333333 },  // white (default)
   { 0xFFF3DC, 0x444444, 0xBBBBBB, 0x333333 },  // warm ivory
+  { 0xF3DADE, 0x59383F, 0xB08A92, 0x4A2E34 },  // rose
+  { 0xCFC9E8, 0x3F3A5C, 0x8F89B5, 0x353052 },  // lavender
   { 0xAEC6DE, 0x2F4358, 0x7E96AC, 0x263A4E },  // mist blue
   { 0xA9B8A0, 0x394733, 0x7C8B74, 0x2F3D2A },  // sage
+  { 0xCEC09F, 0x4A4230, 0x968B68, 0x3E3728 },  // sand
+  { 0x9A9A9A, 0x333333, 0x6E6E6E, 0x2A2A2A },  // mid gray
+  // darker row
   { 0x3D5A80, 0xD5E2F0, 0x6C87A6, 0xE2ECF7 },  // slate blue
   { 0x2A6B66, 0xD2E8E5, 0x5E938E, 0xE0F0EE },  // teal
+  { 0x55603A, 0xDDE3C8, 0x8C9668, 0xE9EED8 },  // olive
   { 0x4A3B5E, 0xE0D5EC, 0x7D6C96, 0xEBE2F4 },  // plum
+  { 0x5A2A3A, 0xEFD3DB, 0x99616F, 0xF6E1E7 },  // wine
+  { 0x453022, 0xE3D0BC, 0x8F7660, 0xEFDFCE },  // brown
+  { 0x16233D, 0xCBD6E8, 0x56657F, 0xDAE3F1 },  // navy
   { 0x000000, 0xCCCCCC, 0x666666, 0xDDDDDD },  // black
 };
 #define THEME_COUNT ((int)(sizeof(THEMES) / sizeof(THEMES[0])))
@@ -813,7 +823,7 @@ static void theme_btn_cb(lv_event_t * e) {
 // the clock without disturbing its layout.
 static void create_brightness_panel(void) {
   bl_panel = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(bl_panel, 300, 92);
+  lv_obj_set_size(bl_panel, 300, 122);
   lv_obj_align(bl_panel, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_obj_remove_flag(bl_panel, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(bl_panel, lv_color_hex(0x181818), 0);
@@ -831,14 +841,15 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_text_color(bl_pct_label, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(bl_pct_label, LV_ALIGN_TOP_LEFT, 0, -2);
 
-  // Background color swatches in a full-width row below the % label; the
-  // current one gets an orange ring. Created after the slider so they win
-  // the hit test over its extended click area.
+  // Background color swatches in two full-width rows below the % label
+  // (light row, then dark row - mirroring the THEMES order); the current
+  // one gets an orange ring. Created after the slider so they win the hit
+  // test over its extended click area.
   for (int i = 0; i < THEME_COUNT; i++) {
     lv_obj_t * b = lv_obj_create(bl_panel);
     lv_obj_remove_style_all(b);
     lv_obj_set_size(b, 24, 24);
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * 37, 26);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, (i % 8) * 37, 26 + (i / 8) * 30);
     lv_obj_set_style_radius(b, 6, 0);
     lv_obj_set_style_bg_color(b, lv_color_hex(THEMES[i].bg), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
