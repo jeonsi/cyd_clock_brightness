@@ -293,14 +293,14 @@ static const theme_t THEMES[] = {
 //   가만히 둬도 유령 터치가 생기면       -> TOUCH_Z_PRESS를 올림(150~300)
 //   살짝 눌러 긋는 스와이프가 안 잡히면 -> TOUCH_Z_PRESS를 내림
 //   펜(약한 압력) 드래그가 끊기면        -> TOUCH_Z_RELEASE를 내림
-#define TOUCH_Z_PRESS      50
-#define TOUCH_Z_RELEASE    40
+#define TOUCH_Z_PRESS      100
+#define TOUCH_Z_RELEASE    50
 
 // 접촉이 단 1프레임(10ms)만 있다가 끝난 아주 짧은 탭을 클릭으로 인정하기 위한 최소
 // 압력. 진짜로 빠르게 두드린 탭은 짧아도 압력이 확실히 오르지만, 노이즈는 낮은
 // 압력으로 한 프레임 스치므로 이 문턱이 고스트 터치를 막음. 2프레임 이상 이어지는
 // 접촉은 TOUCH_Z_PRESS/RELEASE로 정상 인식됨. 고스트 터치가 남으면 올림(150).
-#define TOUCH_Z_SHORT_TAP  100
+#define TOUCH_Z_SHORT_TAP  150
 #if TOUCH_Z_RELEASE > TOUCH_Z_PRESS
 #error "TOUCH_Z_RELEASE must not exceed TOUCH_Z_PRESS (hysteresis would be inverted)"
 #endif
@@ -339,10 +339,10 @@ static const theme_t THEMES[] = {
 
 // 살짝 닿은 접촉(압력이 TOUCH_Z_PRESS 미만)이 이 프레임 수 이상 이어지면 눌림으로
 // 인정. 가볍게 두드리는 탭은 압력이 시작 문턱을 넘지 못하는데, 이 규칙으로 인식됨.
-// TOUCH_Z_PRESS가 TOUCH_Z_RELEASE에 가까우면(현재 50/40) 가벼운 접촉도 정상 경로로
-// 곧바로 눌림이 되어 이 규칙은 거의 발동하지 않음. 시작 문턱을 다시 높이면 그때
-// 의미가 살아남: 2(20ms)가 기본, 유령 터치가 생기면 3~4로.
-#define TOUCH_LIGHT_PRESS_FRAMES 2
+// 시작 문턱(100) 미만 50~99의 가벼운 접촉이 이 프레임 수(10ms 단위) 이상 이어지면
+// 눌림으로 인정. 노이즈는 보통 1~2프레임에 끝나므로 3(30ms)이면 유령 터치 없이
+// 가벼운 탭을 살릴 수 있음. 유령 터치가 남으면 4~5로, 살짝 탭이 씹히면 2로.
+#define TOUCH_LIGHT_PRESS_FRAMES 3
 
 // 스와이프(또는 애매한 움직임) 직후 이 시간(밀리초) 안에 오는 클릭은 스와이프의
 // 꼬리로 보고 무시. 스와이프 직후 곧바로 버튼을 눌러야 하는 흐름에서 버튼이
