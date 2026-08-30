@@ -314,7 +314,11 @@ typedef struct {
 static const theme_t THEMES[] = {
   { 0xFFFFFF, 0x444444, 0xBBBBBB, 0x333333 },  // white (default)
   { 0xFFF3DC, 0x444444, 0xBBBBBB, 0x333333 },  // warm ivory
+  { 0xE9E9E9, 0x444444, 0xB0B0B0, 0x333333 },  // light gray
+  { 0xDCE9F8, 0x445566, 0xA9BCD0, 0x334455 },  // pale blue
   { 0x202020, 0xCCCCCC, 0x666666, 0xDDDDDD },  // dark gray
+  { 0x0E1626, 0xC9D4E4, 0x51617A, 0xDCE4F0 },  // navy
+  { 0x1F130A, 0xD8C4AE, 0x6B584A, 0xE8D8C4 },  // dark brown
   { 0x000000, 0xCCCCCC, 0x666666, 0xDDDDDD },  // black
 };
 #define THEME_COUNT ((int)(sizeof(THEMES) / sizeof(THEMES[0])))
@@ -806,7 +810,7 @@ static void theme_btn_cb(lv_event_t * e) {
 // the clock without disturbing its layout.
 static void create_brightness_panel(void) {
   bl_panel = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(bl_panel, 300, 74);
+  lv_obj_set_size(bl_panel, 300, 92);
   lv_obj_align(bl_panel, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_obj_remove_flag(bl_panel, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(bl_panel, lv_color_hex(0x181818), 0);
@@ -824,12 +828,14 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_text_color(bl_pct_label, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(bl_pct_label, LV_ALIGN_TOP_LEFT, 0, -2);
 
-  // Background color swatches, top-right; the current one gets an orange ring
+  // Background color swatches in a full-width row below the % label; the
+  // current one gets an orange ring. Created after the slider so they win
+  // the hit test over its extended click area.
   for (int i = 0; i < THEME_COUNT; i++) {
     lv_obj_t * b = lv_obj_create(bl_panel);
     lv_obj_remove_style_all(b);
     lv_obj_set_size(b, 24, 24);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -(THEME_COUNT - 1 - i) * 32, -2);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * 37, 26);
     lv_obj_set_style_radius(b, 6, 0);
     lv_obj_set_style_bg_color(b, lv_color_hex(THEMES[i].bg), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
@@ -848,7 +854,8 @@ static void create_brightness_panel(void) {
   lv_obj_set_style_bg_color(bl_slider, lv_color_hex(0xFF3300), LV_PART_INDICATOR);
   lv_obj_set_style_bg_color(bl_slider, lv_color_hex(0xFF8855), LV_PART_KNOB);
   // Enlarge the touch area so the knob is easy to grab on a resistive panel
-  lv_obj_set_ext_click_area(bl_slider, 28);
+  // (kept small enough not to reach into the swatch row above)
+  lv_obj_set_ext_click_area(bl_slider, 16);
   lv_obj_add_event_cb(bl_slider, bl_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
   lv_obj_add_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
