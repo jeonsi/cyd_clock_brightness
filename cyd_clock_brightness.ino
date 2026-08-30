@@ -373,11 +373,16 @@ static lv_obj_t * label_lunar_term;  // current solar term
 #define BOOT_BEEP       1    // double beep at power-on to verify the speaker
 
 // ======================= Hourly chime =====================================
-// One short beep at the top of every hour, daytime only by default so a
-// bedside clock stays quiet at night. Set the hours to 0 and 23 for an
-// around-the-clock chime, or HOURLY_CHIME to 0 to disable it.
+// Casio-style "pip-pip" at the top of every hour: two short high beeps
+// with a short gap. Daytime only by default so a bedside clock stays quiet
+// at night - set the hours to 0 and 23 for an around-the-clock chime, or
+// HOURLY_CHIME to 0 to disable it. The pattern is played with blocking
+// delays (~180 ms total, once an hour) because its 60 ms steps are finer
+// than the UI tick.
 #define HOURLY_CHIME     1
-#define CHIME_MS         150
+#define CHIME_TONE_HZ    2500
+#define CHIME_BEEP_MS    60
+#define CHIME_GAP_MS     60
 #define CHIME_FROM_HOUR  7    // first chiming hour (inclusive)
 #define CHIME_TO_HOUR    22   // last chiming hour (inclusive)
 static lv_obj_t * face_digital;
@@ -405,7 +410,6 @@ static uint32_t   tm_left_ms = 0;
 static uint32_t   tm_last_ms = 0;     // millis() of the previous countdown tick
 static bool       alarm_on = false;
 static uint32_t   alarm_t0 = 0;
-static uint32_t   chime_until_ms = 0;   // nonzero while the hourly beep sounds
 static lv_obj_t * a_scale;
 static lv_obj_t * a_needle_h;
 static lv_obj_t * a_needle_m;
@@ -774,12 +778,6 @@ static void sw_tm_tick(void) {
     if (millis() - alarm_t0 > TIMER_ALARM_MS) alarm_stop();
   }
 
-  // End of the hourly chime beep (started in timer_cb on the minute change)
-  if (chime_until_ms && (int32_t)(millis() - chime_until_ms) >= 0) {
-    chime_until_ms = 0;
-    if (!alarm_on) spk_tone(0);
-  }
-
   if (face_sw && !lv_obj_has_flag(face_sw, LV_OBJ_FLAG_HIDDEN) && sw_running) {
     sw_update_label();
   }
@@ -1003,8 +1001,14 @@ static void timer_cb(lv_timer_t * timer) {
 #if HOURLY_CHIME
     if (!first_update && t.tm_min == 0 && !alarm_on &&
         t.tm_hour >= CHIME_FROM_HOUR && t.tm_hour <= CHIME_TO_HOUR) {
-      spk_tone(ALARM_TONE_HZ);
-      chime_until_ms = millis() + CHIME_MS;
+      // Casio-style pip-pip
+      spk_tone(CHIME_TONE_HZ);
+      delay(CHIME_BEEP_MS);
+      spk_tone(0);
+      delay(CHIME_GAP_MS);
+      spk_tone(CHIME_TONE_HZ);
+      delay(CHIME_BEEP_MS);
+      spk_tone(0);
     }
 #endif
 
