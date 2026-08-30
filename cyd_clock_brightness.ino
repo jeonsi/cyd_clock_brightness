@@ -88,8 +88,9 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define FONT_DATENUM  &font_dseg_26        // date digits
 #define FONT_KR       &font_kr_26          // weekday
 #define FONT_AMPM     &lv_font_montserrat_20   // must be enabled in lv_conf.h
-#define FONT_LUNAR      &font_kr_lunar_22     // "음"/"윤" prefix + solar term
-#define FONT_LUNAR_NUM  &font_dseg_lunar_26   // lunar date digits, DSEG like the solar date
+#define FONT_LUNAR         &font_kr_lunar_22     // "음"/"윤" prefix + solar term
+#define FONT_LUNAR_NUM     &font_dseg_lunar_26   // lunar date digits, DSEG like the solar date
+#define FONT_LUNAR_NUM_SM  &font_dseg_lunar_20   // smaller variant for the analog info column
 
 // Same orange as the solar date digits. Point this at a gray (e.g. 0x777777)
 // to demote the line to secondary information.
@@ -891,7 +892,7 @@ static void create_analog_face(void) {
 
   label_a_lunar_num = lv_label_create(lrow);
   lv_label_set_text(label_a_lunar_num, "");
-  lv_obj_set_style_text_font(label_a_lunar_num, FONT_LUNAR_NUM, 0);
+  lv_obj_set_style_text_font(label_a_lunar_num, FONT_LUNAR_NUM_SM, 0);
 
   label_a_term = lv_label_create(col);
   lv_label_set_text(label_a_term, "");
