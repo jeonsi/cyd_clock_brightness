@@ -847,10 +847,15 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static float    flt_x = 0, flt_y = 0;
   static int32_t  prev_x = 0, prev_y = 0;           // previous raw sample, for per-frame speed
   static int32_t  max_step = 0;                     // largest per-frame move this press
+  static int32_t  pend_dh = 0, pend_dv = 0;         // last frame's raw travel, not yet counted
+  static int32_t  pend_step = 0;                    // last frame's per-frame move, not yet counted
   static bool     dispatched = false;               // PRESSED already reported to LVGL
   static bool     gesture_mode = false;             // moved before dispatch: LVGL never sees it
   static uint32_t press_ms = 0;                     // when the press was confirmed
 
+#if TOUCH_DEBUG
+  int32_t dbg_step = 0;                             // this frame's per-frame move, for the log
+#endif
   int32_t rx = 0, ry = 0;
   int z = xpt_frame(&rx, &ry);
   // Pressure hysteresis: firm to start, light to keep - a stylus tip's low
@@ -895,6 +900,9 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       if (confirm_left < 0) confirm_left = TOUCH_PRESS_CONFIRM_FRAMES;
       if (confirm_left > 0) {
         confirm_left--;
+#if TOUCH_DEBUG
+        Serial.printf("  confirm: skipped onset frame z=%d native=(%d,%d)\n", z, (int)x, (int)y);
+#endif
         data->point.x = last_x;
         data->point.y = last_y;
         data->state = LV_INDEV_STATE_RELEASED;
@@ -908,9 +916,18 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       // Track the farthest point reached, not just the last sample: a
       // finger often bounces back a little as it lifts. Raw travel feeds
       // the swipe test (fast flicks must not be understated by the EMA).
-      int32_t dh_now = y - press_y, dv_now = x - press_x;
-      if (LV_ABS(dh_now) > LV_ABS(peak_dh)) peak_dh = dh_now;
-      if (LV_ABS(dv_now) > LV_ABS(peak_dv)) peak_dv = dv_now;
+      //
+      // One frame of lag: a frame's movement only counts once the NEXT
+      // frame still shows contact. The last frame before lift-off is read
+      // while the finger is already leaving - the pressure collapses and
+      // the coordinate jumps by tens of px - and must not decide whether a
+      // tap was "moving". Since this frame has contact, the previous
+      // frame was not the lift-off frame, so its movement is counted now.
+      if (LV_ABS(pend_dh) > LV_ABS(peak_dh)) peak_dh = pend_dh;
+      if (LV_ABS(pend_dv) > LV_ABS(peak_dv)) peak_dv = pend_dv;
+      if (pend_step > max_step) max_step = pend_step;
+      pend_dh = y - press_y;
+      pend_dv = x - press_x;
     }
 
     if (!pressed) {
@@ -926,11 +943,17 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       prev_x = x;
       prev_y = y;
       max_step = 0;
+      pend_dh = pend_dv = pend_step = 0;
       dispatched = false;
       gesture_mode = false;
       press_ms = millis();
       swipe_armed = (bl_panel == NULL) ||
                     lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
+#if TOUCH_DEBUG
+      Serial.printf("PRESS native=(%d,%d) z=%d gestures=%s (hold %dms, swipe>=%dpx, tap<%dpx, step<%dpx/frame)\n",
+                    (int)x, (int)y, z, swipe_armed ? "armed" : "off(panel open)",
+                    TOUCH_PRESS_HOLD_MS, TOUCH_SWIPE_MIN_PX, TOUCH_TAP_MAX_PX, TOUCH_MOVE_STEP_PX);
+#endif
     } else {
       // EMA across frames: irons out the remaining wobble during drags
       flt_x += TOUCH_FILTER_ALPHA * ((float)x - flt_x);
@@ -944,8 +967,12 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       if (ft > peak_flt) peak_flt = ft;
       // Per-frame speed: a finger in motion moves several px per frame even
       // when the press registered late and the total travel is short.
-      int32_t step = LV_MAX(LV_ABS(x - prev_x), LV_ABS(y - prev_y));
-      if (step > max_step) max_step = step;
+      // Held back one frame like the raw travel above (the previous frame's
+      // step was folded into max_step just before).
+      pend_step = LV_MAX(LV_ABS(x - prev_x), LV_ABS(y - prev_y));
+#if TOUCH_DEBUG
+      dbg_step = pend_step;
+#endif
       prev_x = x;
       prev_y = y;
 
@@ -965,8 +992,15 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     }
 
 #if TOUCH_DEBUG
-    Serial.printf("z=%d raw=(%ld,%ld) -> native=(%d,%d)\n",
-                  z, (long)rx, (long)ry, (int)(flt_x + 0.5f), (int)(flt_y + 0.5f));
+    Serial.printf("  z=%4d raw=(%4ld,%4ld) native=(%3d,%3d) flt=(%3d,%3d) t=%3lums "
+                  "travel=%3ld/%d flt_pk=%3ld/%d step=%2ld max=%2ld/%d %s\n",
+                  z, (long)rx, (long)ry, (int)x, (int)y,
+                  (int)(flt_x + 0.5f), (int)(flt_y + 0.5f),
+                  (unsigned long)(millis() - press_ms),
+                  (long)LV_MAX(LV_ABS(peak_dh), LV_ABS(peak_dv)), TOUCH_SWIPE_MIN_PX,
+                  (long)peak_flt, TOUCH_TAP_MAX_PX,
+                  (long)dbg_step, (long)max_step, TOUCH_MOVE_STEP_PX,
+                  gesture_mode ? "GESTURE(hidden from LVGL)" : dispatched ? "LVGL pressed" : "HOLD");
 #endif
 
     last_x = (int32_t)(flt_x + 0.5f);
@@ -979,6 +1013,10 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     // ended before the hold window ran out is delivered now, so LVGL sees a
     // press during the debounce and the release right after it.
     if (!dispatched && !gesture_mode) dispatched = true;
+#if TOUCH_DEBUG
+    Serial.printf("  dip: z=%d < %d, holding position (debounce %lu/%dms)\n",
+                  z, TOUCH_Z_RELEASE, (unsigned long)(millis() - last_ok_ms), TOUCH_RELEASE_DEBOUNCE_MS);
+#endif
   }
   else {
     // Presses that began on a clickable widget (a button, the slider) belong
@@ -990,31 +1028,40 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     lv_obj_t * act_obj = lv_indev_get_active_obj();
     bool on_widget = (act_obj != NULL && act_obj != lv_screen_active());
     bool handled = false;   // consumed as a swipe or as ambiguous movement
+#if TOUCH_DEBUG
+    bool was_pressed = pressed;
+    bool was_blip    = (!pressed && confirm_left >= 0);
+    const char * verdict = on_widget ? "WIDGET click/drag (no gesture test)" : "TAP";
+    if (pressed && !swipe_armed) verdict = "TAP/DRAG (gestures off: panel open)";
+#endif
 
     if (pressed && swipe_armed && face_digital && (gesture_mode || !on_widget)) {
       // Release edge. The display is rotated 270 degrees, so
       // screen-horizontal movement is the native Y axis. Three outcomes:
-      //   raw peak travel >= TOUCH_SWIPE_MIN_PX  -> gesture, larger axis decides
-      //   filtered peak  >= TOUCH_TAP_MAX_PX     -> neither: a swipe that broke
-      //                                             up early must not become a tap
-      //   otherwise                              -> tap (LVGL's CLICKED goes through)
+      //   swipe    : raw peak travel >= TOUCH_SWIPE_MIN_PX, or a flick - moving
+      //              faster than a tap ever does (max_step >= TOUCH_MOVE_STEP_PX)
+      //              and at least half the swipe distance. A fast finger leaves
+      //              the resistive panel early, so the panel sees only the first
+      //              part of the stroke and distance alone understates it.
+      //   ambiguous: not a swipe, yet moved too far (filtered peak >=
+      //              TOUCH_TAP_MAX_PX) or too fast for a tap -> neither. A slow
+      //              slide off a button must not become a tap or a swipe.
+      //   otherwise: tap (LVGL's CLICKED goes through)
       // Raw travel for the swipe test so fast flicks are not understated;
       // filtered travel for the tap test so spikes do not swallow taps.
       int32_t dh = peak_dh;
       int32_t dv = peak_dv;
       int32_t travel = LV_MAX(LV_ABS(dh), LV_ABS(dv));
-      int32_t min_px = TOUCH_SWIPE_MIN_PX;
-      if (travel < min_px &&
-          (peak_flt >= TOUCH_TAP_MAX_PX || max_step >= TOUCH_MOVE_STEP_PX)) {
-        // Ambiguous: moved too much or too fast for a tap, but not far enough
-        // for a swipe (typically a swipe that registered late or broke up).
-        // Swallow the click, do nothing.
-        last_gesture_ms = millis();
-        handled = true;
-      }
-      else if (travel >= min_px) {
+      bool by_distance = (travel >= TOUCH_SWIPE_MIN_PX);
+      bool by_flick    = (max_step >= TOUCH_MOVE_STEP_PX && travel >= TOUCH_SWIPE_MIN_PX / 2);
+      if (by_distance || by_flick) {
         last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
         handled = true;
+#if TOUCH_DEBUG
+        verdict = (LV_ABS(dh) < LV_ABS(dv)) ? (by_distance ? "SWIPE vertical (no action)" : "SWIPE vertical by flick (no action)")
+                : (dh < 0) ? (by_distance ? "SWIPE left -> next face" : "SWIPE left by flick -> next face")
+                : (by_distance ? "SWIPE right -> previous face" : "SWIPE right by flick -> previous face");
+#endif
         if (LV_ABS(dh) >= LV_ABS(dv)) {
           // dh > 0 is a rightward swipe on screen (screen x = native y).
           // Swipe left -> next face, swipe right -> previous face.
@@ -1029,6 +1076,16 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
         // Vertical swipes are consumed with no action (months are browsed
         // with the calendar's < > buttons).
       }
+      else if (peak_flt >= TOUCH_TAP_MAX_PX || max_step >= TOUCH_MOVE_STEP_PX) {
+        // Ambiguous: moved too much or too fast for a tap, but not a swipe
+        // either (a slow slide, or a flick that stayed very short). Swallow
+        // the click, do nothing.
+        last_gesture_ms = millis();
+        handled = true;
+#if TOUCH_DEBUG
+        verdict = "IGNORED: moved/too fast for a tap but short of a swipe";
+#endif
+      }
     }
 
     if (pressed && !dispatched && !handled) {
@@ -1039,7 +1096,26 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       dispatched = true;
       gesture_mode = false;
       last_ok_ms = millis();
+#if TOUCH_DEBUG
+      Serial.printf("LATE TAP: held-back press was no gesture, delivering PRESSED now "
+                    "(travel=%ld/%d flt_pk=%ld/%d max_step=%ld/%d)\n",
+                    (long)LV_MAX(LV_ABS(peak_dh), LV_ABS(peak_dv)), TOUCH_SWIPE_MIN_PX,
+                    (long)peak_flt, TOUCH_TAP_MAX_PX, (long)max_step, TOUCH_MOVE_STEP_PX);
+#endif
     } else {
+#if TOUCH_DEBUG
+      if (was_pressed) {
+        Serial.printf("RELEASE after %lums: travel=%ld (swipe>=%d) flt_pk=%ld (tap<%d) "
+                      "max_step=%ld (tap<%d) widget=%d -> %s\n",
+                      (unsigned long)(millis() - press_ms),
+                      (long)LV_MAX(LV_ABS(peak_dh), LV_ABS(peak_dv)), TOUCH_SWIPE_MIN_PX,
+                      (long)peak_flt, TOUCH_TAP_MAX_PX, (long)max_step, TOUCH_MOVE_STEP_PX,
+                      (int)on_widget, verdict);
+      } else if (was_blip) {
+        Serial.printf("BLIP: contact ended before confirmation (<%d frame(s) of %dms) -> ignored\n",
+                      TOUCH_PRESS_CONFIRM_FRAMES + 1, TOUCH_READ_PERIOD_MS);
+      }
+#endif
       pressed = false;
       confirm_left = -1;   // next contact starts a fresh confirmation
     }
