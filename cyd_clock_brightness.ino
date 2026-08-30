@@ -229,6 +229,7 @@ static lv_obj_t * cards[MAX_CARDS];  // raised plates behind face content
 static int        card_count = 0;
 static lv_obj_t * label_ghost;       // ghost "88:88" (SHOW_GHOST_SEGMENTS) or NULL
 static lv_obj_t * lbl_h24;           // "12H" / "24H" on the brightness panel
+static lv_obj_t * lbl_screen;         // screen-timeout toggle label on the panel
 static bool       h24 = false;       // 24-hour format (kept in NVS)
 static bool       time_fmt_dirty = false;
 static int32_t    w_hm_12 = 0, w_hm_24 = 0;
@@ -344,6 +345,9 @@ static int      bl_saved_pct = -1;
 static uint32_t bl_last_touch_ms = 0;
 static int      bl_auto_factor = 100;   // % of bl_pct, driven by the LDR
 static float    ldr_ema = -1.0f;
+static bool     screen_off = false;     // backlight fully off after SCREEN_OFF_MS idle
+static bool     screen_auto = true;     // false = always on (panel toggle, kept in NVS "soff")
+static uint32_t last_touch_ms = 0;      // last frame with panel contact (screen timeout)
 
 void log_print(lv_log_level_t level, const char * buf) {
   LV_UNUSED(level);
@@ -375,12 +379,30 @@ static uint32_t bl_pct_to_duty(int pct) {
 }
 
 static void bl_apply(void) {
-  int pct = bl_pct * bl_auto_factor / 100;
+  // Screen timeout: duty 0 (not the faint-glow floor) until a touch wakes it
+  uint32_t duty = screen_off ? 0 : bl_pct_to_duty(bl_pct * bl_auto_factor / 100);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcWrite(BL_PIN, bl_pct_to_duty(pct));
+  ledcWrite(BL_PIN, duty);
 #else
-  ledcWrite(BL_CHANNEL, bl_pct_to_duty(pct));
+  ledcWrite(BL_CHANNEL, duty);
 #endif
+}
+
+// ---- Screen timeout --------------------------------------------------------
+// After SCREEN_OFF_MS without a touch the backlight goes fully off; the next
+// touch turns it back on (and is swallowed, see touchscreen_read). Alarms
+// wake the screen and keep it on while ringing. 0 disables the timeout.
+static void screen_sleep(void) {
+  if (screen_off) return;
+  screen_off = true;
+  bl_apply();
+}
+
+static void screen_wake(void) {
+  last_touch_ms = millis();
+  if (!screen_off) return;
+  screen_off = false;
+  bl_apply();
 }
 
 #if AUTO_BL
@@ -747,6 +769,7 @@ static void alarm_start(uint32_t limit_ms) {
   alarm_on = true;
   alarm_t0 = millis();
   alarm_phase = -1;   // first tick applies tone + overlay opacity at once
+  screen_wake();      // ringing with the screen dark would be confusing
   alarm_limit_ms = limit_ms;
   if (alarm_overlay) lv_obj_remove_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
 }
@@ -880,6 +903,30 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   // has been seen (press confirmation pending) the hold level applies too,
   // so a light swipe only has to cross TOUCH_Z_PRESS for a single frame.
   bool contact = (z >= ((pressed || confirm_left >= 0) ? TOUCH_Z_RELEASE : TOUCH_Z_PRESS));
+
+  // Screen timeout. Any contact counts as activity. When the screen is off
+  // the first contact only wakes it, and that whole touch is swallowed -
+  // LVGL sees nothing and no gesture is classified - so waking the clock
+  // never presses a button or flips a face. Swallowing ends when the panel
+  // has been free of contact for the release debounce.
+  static bool     wake_swallow = false;
+  static uint32_t wake_last_ms = 0;
+  if (contact) last_touch_ms = millis();
+  if (screen_off && contact) {
+#if TOUCH_DEBUG
+    Serial.println("WAKE: screen on, this touch is swallowed");
+#endif
+    screen_wake();
+    wake_swallow = true;
+  }
+  if (wake_swallow) {
+    if (z >= TOUCH_Z_RELEASE) wake_last_ms = millis();
+    else if (millis() - wake_last_ms > TOUCH_RELEASE_DEBOUNCE_MS) wake_swallow = false;
+    data->point.x = last_x;
+    data->point.y = last_y;
+    data->state = LV_INDEV_STATE_RELEASED;
+    return;
+  }
 
   // Coordinates are usable whenever there is any real contact (z at or
   // above the hold level), even before the press level is reached.
@@ -1358,6 +1405,11 @@ static void timer_cb(lv_timer_t * timer) {
   auto_bl_update();
 #endif
 
+#if SCREEN_OFF_MS > 0
+  if (screen_auto && !screen_off && !alarm_on && boot_state == BOOT_DONE &&
+      millis() - last_touch_ms > (uint32_t)SCREEN_OFF_MS) screen_sleep();
+#endif
+
   // Hide the brightness panel once the user stops touching it
   if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN) &&
       (millis() - bl_last_touch_ms) > BL_PANEL_TIMEOUT_MS) {
@@ -1573,6 +1625,29 @@ static void h24_btn_cb(lv_event_t * e) {
   bl_last_touch_ms = millis();
 }
 
+// ---- Screen-timeout toggle on the brightness panel -------------------------
+// Shows the timeout it will apply ("30s" / "5m") when auto-off is armed, or
+// "ON" when the screen is set to stay on.
+static void screen_btn_refresh(void) {
+  char buf[16];
+  if (!screen_auto) {
+    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " ON");
+  } else if (SCREEN_OFF_MS < 60000) {
+    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " %lus", (unsigned long)(SCREEN_OFF_MS / 1000));
+  } else {
+    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " %lum", (unsigned long)(SCREEN_OFF_MS / 60000));
+  }
+  lv_label_set_text(lbl_screen, buf);
+}
+
+static void screen_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  screen_auto = !screen_auto;
+  prefs.putInt("soff", screen_auto ? 1 : 0);
+  screen_btn_refresh();
+  bl_last_touch_ms = millis();
+}
+
 // ---- Theme swatches on the brightness panel -------------------------------
 static void theme_btn_refresh(void) {
   for (int i = 0; i < THEME_COUNT; i++) {
@@ -1620,6 +1695,14 @@ static void create_brightness_panel(void) {
   lv_obj_t * hb = make_button(bl_panel, h24 ? "24H" : "12H", h24_btn_cb, NULL, 64, 26);
   lv_obj_align(hb, LV_ALIGN_TOP_RIGHT, 0, -4);
   lbl_h24 = lv_obj_get_child(hb, 0);
+
+#if SCREEN_OFF_MS > 0
+  // Screen timeout toggle (auto-off after SCREEN_OFF_MS / always on), left of it
+  lv_obj_t * sb = make_button(bl_panel, "", screen_btn_cb, NULL, 76, 26);
+  lv_obj_align(sb, LV_ALIGN_TOP_RIGHT, -70, -4);
+  lbl_screen = lv_obj_get_child(sb, 0);
+  screen_btn_refresh();
+#endif
 
   // Background color swatches in two full-width rows below the % label
   // (light row, then dark row - mirroring the THEMES order); the current
@@ -2354,6 +2437,7 @@ void setup() {
   theme_idx = prefs.getInt("theme", 0);
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
   h24 = prefs.getInt("h24", 0) != 0;
+  screen_auto = prefs.getInt("soff", 1) != 0;
   for (int i = 0; i < ALARM_COUNT; i++) {
     char k[8];
     alarm_t * a = &alarms[i];
