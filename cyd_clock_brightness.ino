@@ -6,6 +6,8 @@
       - seven-segment (DSEG) digits for the time, seconds and date
       - HH:MM drawn in the Bold weight, everything else Regular
       - larger time and seconds, small AM/PM, Korean weekday
+      - the weekday turns red on Sundays and Korean public holidays
+        (built-in table for 2026-2030, substitute holidays included)
       - every field has a fixed width so nothing shifts when the digits change
       - touch the screen to bring up a backlight brightness slider
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
@@ -139,6 +141,95 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS);
 
 // tm_wday: 0 = Sunday
 static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "금", "토"};
+
+// ======================= Korean public holidays ==========================
+// The weekday is drawn in red on Sundays and on the dates below.
+#define WEEKDAY_COLOR_NORMAL  lv_color_hex(0x33CC66)
+#define WEEKDAY_COLOR_HOLIDAY lv_color_hex(0xE60000)
+
+// YYYYMMDD, sorted. Covers 2026-2030 including substitute holidays.
+// 제헌절 is a statutory public holiday again from 2026 (법률 제21338호).
+// Extend this table as the years run out - the lunar holidays (설날, 추석,
+// 부처님오신날) and the substitute days cannot be computed from tm alone.
+static const uint32_t HOLIDAYS_KR[] = {
+  // 2026
+  20260101,                               // 신정
+  20260216, 20260217, 20260218,           // 설날
+  20260301, 20260302,                     // 삼일절 + 대체
+  20260505,                               // 어린이날
+  20260524, 20260525,                     // 부처님오신날 + 대체
+  20260606,                               // 현충일
+  20260717,                               // 제헌절
+  20260815, 20260817,                     // 광복절 + 대체
+  20260924, 20260925, 20260926,           // 추석
+  20261003, 20261005,                     // 개천절 + 대체
+  20261009,                               // 한글날
+  20261225,                               // 크리스마스
+  // 2027
+  20270101,
+  20270206, 20270207, 20270208, 20270209, // 설날 + 대체
+  20270301,
+  20270505,
+  20270513,                               // 부처님오신날
+  20270606,
+  20270717, 20270719,                     // 제헌절 + 대체
+  20270815, 20270816,                     // 광복절 + 대체
+  20270914, 20270915, 20270916,           // 추석
+  20271003, 20271004,                     // 개천절 + 대체
+  20271009, 20271011,                     // 한글날 + 대체
+  20271225, 20271227,                     // 크리스마스 + 대체
+  // 2028
+  20280101,
+  20280126, 20280127, 20280128,           // 설날
+  20280301,
+  20280502,                               // 부처님오신날
+  20280505,
+  20280606,
+  20280717,
+  20280815,
+  20281002, 20281003, 20281004, 20281005, // 추석(개천절 겹침) + 대체
+  20281009,
+  20281225,
+  // 2029
+  20290101,
+  20290212, 20290213, 20290214,           // 설날
+  20290301,
+  20290505, 20290507,                     // 어린이날 + 대체
+  20290520, 20290521,                     // 부처님오신날 + 대체
+  20290606,
+  20290717,
+  20290815,
+  20290921, 20290922, 20290923, 20290924, // 추석 + 대체
+  20291003,
+  20291009,
+  20291225,
+  // 2030
+  20300101,
+  20300202, 20300203, 20300204, 20300205, // 설날 + 대체
+  20300301,
+  20300505, 20300506,                     // 어린이날 + 대체
+  20300509,                               // 부처님오신날
+  20300606,
+  20300717,
+  20300815,
+  20300911, 20300912, 20300913,           // 추석
+  20301003,
+  20301009,
+  20301225,
+};
+
+// Sunday or a listed public holiday. Called once per day change, so a
+// linear scan over ~100 entries costs nothing.
+static bool is_red_day(const struct tm * t) {
+  if (t->tm_wday == 0) return true;
+  uint32_t ymd = (uint32_t)(t->tm_year + 1900) * 10000u
+               + (uint32_t)(t->tm_mon + 1) * 100u
+               + (uint32_t)t->tm_mday;
+  for (size_t i = 0; i < sizeof(HOLIDAYS_KR) / sizeof(HOLIDAYS_KR[0]); i++) {
+    if (HOLIDAYS_KR[i] == ymd) return true;
+  }
+  return false;
+}
 
 static lv_obj_t * label_ampm;
 static lv_obj_t * label_hm;
@@ -378,6 +469,8 @@ static void timer_cb(lv_timer_t * timer) {
     lv_label_set_text(label_datenum, buf);
     snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[t.tm_wday]);
     lv_label_set_text(label_wd, buf);
+    lv_obj_set_style_text_color(label_wd,
+        is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL, 0);
   }
 
   // Hide the brightness panel once the user stops touching it
@@ -493,7 +586,7 @@ void lv_create_main_gui(void) {
   lv_obj_add_style(label_wd, &style_kr, 0);
   lv_obj_set_width(label_wd, w_wd);
   lv_obj_set_style_text_align(label_wd, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_color(label_wd, lv_color_hex(0x33CC66), 0);
+  lv_obj_set_style_text_color(label_wd, WEEKDAY_COLOR_NORMAL, 0);
   lv_obj_set_style_translate_y(label_wd, WEEKDAY_BASELINE_NUDGE, 0);
 
   // ================= Time row: [ HH:MM ][ AM/PM over SS ] =================
