@@ -1514,8 +1514,9 @@ static void create_analog_face(void) {
   lv_obj_set_width(label_a_event, 116);          // long names wrap
   lv_obj_set_style_text_align(label_a_event, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
-
-  theme_apply();   // paint the dial and needles for the restored theme
+  // Colors are applied by theme_apply() from lv_create_main_gui() once
+  // every face exists - calling it here would leave the cards of the faces
+  // created later (calendar, stopwatch, timer) at LVGL's default white.
 }
 
 // ============ Calendar face: month title, 일..토 header, 6x7 day grid =====
@@ -1852,6 +1853,7 @@ void lv_create_main_gui(void) {
   create_calendar_face();
   create_stopwatch_face();
   create_timer_face();
+  theme_apply();        // now that every face and card exists
   face_apply();         // show the face restored from NVS
 
   create_brightness_panel();
