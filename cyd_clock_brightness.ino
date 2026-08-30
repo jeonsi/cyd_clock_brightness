@@ -847,7 +847,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static int      pend_z = 0;                       // its pressure
   static bool     swipe_armed = false;
   static float    flt_x = 0, flt_y = 0;
-  static int      light_frames = 0;                 // consecutive light-contact frames
   static int32_t  prev_x = 0, prev_y = 0;           // previous raw sample, for per-frame speed
   static int32_t  max_step = 0;                     // largest per-frame move this press
   static bool     dispatched = false;               // PRESSED already reported to LVGL
@@ -887,20 +886,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     if (y >= SCREEN_HEIGHT) y = SCREEN_HEIGHT - 1;
   }
 
-  // Light contact (touching, but below the press level). A light touch that
-  // stays put never reaches TOUCH_Z_PRESS at all (a swipe does, as the finger
-  // presses harder while moving). If the light contact persists for
-  // TOUCH_LIGHT_PRESS_FRAMES it is a real touch: accept it as a press. Noise
-  // blips are gone within a frame or two.
-  if (coords_ok && !contact && !pressed) {
-    if (++light_frames >= TOUCH_LIGHT_PRESS_FRAMES) {
-      contact = true;
-      confirm_left = 0;   // the stable light frames already served as confirmation
-    }
-  } else if (!coords_ok) {
-    light_frames = 0;
-  }
-  if (pressed) light_frames = 0;
 
   if (contact) {
     // Press confirmation: the first contact frame(s) come from the
