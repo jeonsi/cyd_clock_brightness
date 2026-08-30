@@ -530,12 +530,16 @@ static void timer_cb(lv_timer_t * timer) {
     strftime(buf, sizeof(buf), "%S", &t);
     lv_label_set_text(label_sec, buf);
 
-    // Needles share the 0..60 value space; the hour needle creeps with the
-    // minutes. Updated even while hidden so a face switch is never stale.
-    lv_scale_set_line_needle_value(a_scale, a_needle_s, ANALOG_SEC_LEN, t.tm_sec);
-    lv_scale_set_line_needle_value(a_scale, a_needle_m, ANALOG_MIN_LEN, t.tm_min);
+    // Needles share the 0..3600 value space (one unit per second): the
+    // minute needle creeps with the seconds and the hour needle with the
+    // minutes, like real clockwork instead of once-a-minute jumps.
+    // Updated even while hidden so a face switch is never stale.
+    lv_scale_set_line_needle_value(a_scale, a_needle_s, ANALOG_SEC_LEN,
+                                   t.tm_sec * 60);
+    lv_scale_set_line_needle_value(a_scale, a_needle_m, ANALOG_MIN_LEN,
+                                   t.tm_min * 60 + t.tm_sec);
     lv_scale_set_line_needle_value(a_scale, a_needle_h, ANALOG_HOUR_LEN,
-                                   (t.tm_hour % 12) * 5 + t.tm_min / 12);
+                                   (t.tm_hour % 12) * 300 + t.tm_min * 5 + t.tm_sec / 12);
   }
 
   if (t.tm_min != last_min) {
@@ -687,13 +691,16 @@ static void create_analog_face(void) {
   lv_obj_set_size(face_analog, lv_pct(100), lv_pct(100));
 
   // ---- Dial: a round lv_scale with 60 minute ticks, hour numerals on the
-  // majors. Rotation 270 puts value 0 at 12 o'clock; range 0..60 lets all
-  // three needles share one value space (hour mapped to h*5 + min/12).
+  // majors. Rotation 270 puts value 0 at 12 o'clock. The value space is
+  // 0..3600 (one unit per second) rather than 0..60, so the minute and hour
+  // needles can creep smoothly between ticks instead of jumping once a
+  // minute; the 61 ticks still land on every 60th unit, so the dial itself
+  // looks the same.
   a_scale = lv_scale_create(face_analog);
   lv_obj_set_size(a_scale, ANALOG_DIAL_SIZE, ANALOG_DIAL_SIZE);
   lv_obj_align(a_scale, LV_ALIGN_LEFT_MID, 8, 0);
   lv_scale_set_mode(a_scale, LV_SCALE_MODE_ROUND_INNER);
-  lv_scale_set_range(a_scale, 0, 60);
+  lv_scale_set_range(a_scale, 0, 3600);
   lv_scale_set_angle_range(a_scale, 360);
   lv_scale_set_rotation(a_scale, 270);
   lv_scale_set_total_tick_count(a_scale, 61);
