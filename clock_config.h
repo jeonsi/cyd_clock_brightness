@@ -360,6 +360,16 @@ static const theme_t THEMES[] = {
 // 알람 개수. 선택 버튼 폭(56px, 간격 64px) 기준으로 4개까지는 한 줄에 들어감.
 #define ALARM_COUNT      3
 
+// 알람 하나의 상태. (여기에 두는 이유: Arduino IDE가 함수 프로토타입을 스케치
+// 상단에 자동 삽입하므로, 함수 인자로 쓰이는 타입은 헤더에서 먼저 정의돼야 함)
+typedef struct {
+  int     hh, mm;      // 알람 시각(24시간 기준)
+  bool    enabled;     // ON/OFF
+  uint8_t days;        // 울릴 요일 비트마스크, 비트 0 = 일요일(tm_wday)
+  bool    once;        // 1x: 한 번 울린 뒤 스스로 OFF
+  uint8_t days_saved;  // 1x를 끌 때 복원할 요일(저장 안 됨)
+} alarm_t;
+
 // 저장값이 없을 때(첫 부팅)의 알람 시각. 24시간 기준. 모든 알람에 적용.
 #define ALARM_DEFAULT_HH 7
 #define ALARM_DEFAULT_MM 0

@@ -299,13 +299,9 @@ static lv_obj_t * label_al_ampm;
 static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
 static lv_obj_t * label_bell;           // bell indicator on the digital face
 static lv_obj_t * label_bell_a;         // same, on the analog face
-typedef struct {
-  int     hh, mm;
-  bool    enabled;
-  uint8_t days;       // weekday mask, bit 0 = Sunday (tm_wday)
-  bool    once;       // ring once, then switch itself OFF
-  uint8_t days_saved; // mask to restore when 1x is switched off again (RAM only)
-} alarm_t;
+// alarm_t itself is declared in clock_config.h: the Arduino IDE inserts
+// auto-generated function prototypes right after the #includes, and a
+// prototype taking alarm_t* needs the type to exist by then.
 static alarm_t    alarms[ALARM_COUNT];   // all kept in NVS
 static int        al_sel = 0;            // alarm being edited on the face
 static lv_obj_t * btn_al_sel[ALARM_COUNT];
