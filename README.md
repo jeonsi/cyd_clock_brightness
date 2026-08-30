@@ -1,8 +1,10 @@
 # CYD Clock (밝기 조절 지원)
 
 ESP32 CYD(Cheap Yellow Display, **ESP32-2432S028R**) 보드용 탁상시계입니다.
-NTP로 시간을 동기화하고, 7세그먼트(DSEG) 디지털 화면과 아날로그 다이얼 화면을
-좌우 스와이프로 오가며, 화면을 터치하면 백라이트 밝기 슬라이더가 나타납니다.
+NTP로 시간을 동기화하고, 좌우 스와이프로 **디지털(7세그먼트 DSEG) · 아날로그 · 달력 ·
+스톱워치 · 타이머 · 알람** 여섯 화면을 오가며, 화면을 터치하면 백라이트 밝기와 배경
+테마, 12/24시간 형식을 조절하는 패널이 나타납니다. 음력·절기·한국 공휴일을 표시하고,
+조도 센서 자동 밝기와 정시 알림음을 지원합니다.
 
 [Random Nerd Tutorials의 ESP32 CYD LVGL Digital Clock](https://RandomNerdTutorials.com/esp32-cyd-lvgl-digital-clock/) 예제를 기반으로 크게 수정한 버전입니다.
 
@@ -95,8 +97,10 @@ Arduino IDE 기준:
    - (터치 라이브러리는 불필요 — XPT2046을 SPI로 직접 구동)
 2. **lv_conf.h** 에서 `LV_FONT_MONTSERRAT_20` 활성화 (밝기 %·버튼 심볼·다이얼 숫자·달력에 사용)
 3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 (`secrets.h`는 gitignore되어 커밋되지 않음)
-4. 필요 시 `TZ_INFO`(타임존) 수정
+4. 필요 시 `clock_config.h`에서 `TZ_INFO`(타임존) 등 설정 수정 (항목별 한국어 설명 포함)
 5. 파일을 UTF-8로 저장(Arduino IDE 기본값) 후 업로드
+
+소스 파일 구성: `cyd_clock_brightness.ino`(동작 코드) · `clock_config.h`(모든 튜닝 값) · `clock_fonts.h` / `lunar_font.h`(폰트) · `korean_calendar.h`(음력·절기·공휴일 테이블) · `secrets.h`(Wi-Fi, gitignore)
 
 ## 폰트 (`clock_fonts.h`)
 
@@ -111,9 +115,10 @@ Arduino IDE 기준:
 | `font_dseg14_ampm_20` | AM/PM (DSEG14 Classic Italic 20px, `AMP` — 숫자와 같은 기울기의 14세그먼트 알파벳) |
 | `font_kr_26` | 한글 요일 (나눔고딕 26px, `일월화수목금토` 만 포함) |
 
-음력/절기 줄에는 별도의 `lunar_font.h`에 담긴 두 폰트가 사용됩니다:
+음력/절기 줄과 아날로그 정보 열, 스톱워치 랩 줄에는 별도의 `lunar_font.h`에 담긴 세 폰트가 사용됩니다:
 
-- `font_dseg_lunar_26` — 음력 숫자용. 양력 날짜와 동일한 DSEG7 Classic Italic 26px에 점(`.`) 글리프를 추가한 것. 번들 폰트와 똑같이 숫자 7의 F세그먼트를 제거(fontTools로 TTF 윤곽선 수술)했고, DSEG 원본의 점은 advance가 0(LCD처럼 직전 숫자에 겹침)이라 날짜 구분자로 읽히도록 7.5px로 패치함
+- `font_dseg_lunar_26` — 음력 숫자·달력 제목용. 양력 날짜와 동일한 DSEG7 Classic Italic 26px에 점(`.`) 글리프를 추가한 것. 번들 폰트와 똑같이 숫자 7의 F세그먼트를 제거(fontTools로 TTF 윤곽선 수술)했고, DSEG 원본의 점은 advance가 0(LCD처럼 직전 숫자에 겹침)이라 날짜 구분자로 읽히도록 7.5px로 패치함
+- `font_dseg_lunar_20` — 위의 20px 판(`0-9 . :` 공백). 아날로그 정보 열의 음력 숫자와 스톱워치 랩 줄에 사용
 - `font_kr_lunar_22` — "음"·"윤"·절기 명칭·명절/공휴일 이름용 나눔고딕 22px 서브셋
 
 특이사항:
@@ -163,10 +168,17 @@ Arduino IDE 기준:
 | `CHIME_BEEP/GAP_MS` | 60/60 | 정시음 비프 길이와 간격 |
 | `CHIME_FROM/TO_HOUR` | 7/22 | 정시음이 울리는 시간대(포함 범위). 0/23이면 24시간 |
 | `ALARM_TONE_HZ` | 2000 | 알람/비프 주파수. 스피커 음량이 작으면 1000~3000에서 조정 |
+| `TIMER_ALARM_MS` / `ALARM_RING_MS` | 30초 / 30초 | 타이머 알람·기상 알람이 탭 없이 자동 종료되기까지의 시간 |
+| `ALARM_COUNT` | 3 | 알람 개수(한 줄 배치상 4개까지) |
+| `ALARM_DEFAULT_HH/MM` | 7/0 | 첫 부팅 시 알람 기본 시각 |
+| `SW_DISPLAY_MS` | 30 | 스톱워치 실행 중 1/100초 표시 갱신 주기 |
+| `SW_LAPS` / `SW_LAP_GAP_PX` | 3 / 14 | 랩 표시 줄 수, 랩 줄의 열 간격 |
+| `CAL_OFF_MAX` | 120 | 달력에서 넘겨볼 수 있는 최대 개월 수(앞뒤) |
 | `ANALOG_DIAL_SIZE` | 188 | 아날로그 다이얼 지름(px) |
 | `ANALOG_HOUR/MIN/SEC_LEN` | 48/68/78 | 시침·분침·초침 길이(px, 중심 기준) |
 | `TOUCH_SWIPE_MIN_PX` | 60 | 스와이프로 인식할 최소 이동 거리(px). 속도 무관, 누른 동안의 최대 변위로 판정 |
 | `TOUCH_PRESS_CONFIRM_FRAMES` | 1 | 눌림 확정 전 건너뛸 접촉 프레임 수. 0이면 즉시, 2면 더 보수적 |
+| `TOUCH_RELEASE_DEBOUNCE_MS` | 100 | 드래그 중 순간 접촉 끊김을 눌린 상태로 유지하는 시간 |
 | `TOUCH_TAP_MAX_PX` | 24 | 탭으로 인정할 최대 이동(px, 필터된 좌표 기준). 그 이상~스와이프 미만은 끊긴 스와이프로 간주해 무시 |
 | `TOUCH_Z_PRESS/RELEASE` | 300/100 | 터치 시작/유지 압력 임계값. 유령 터치가 생기면 PRESS를 올리고, 펜 드래그가 끊기면 RELEASE를 내림 |
 | `TOUCH_SAMPLES` | 8 | 축당 샘플 수(중간 절반 평균). 늘리면 더 안정, 읽기 시간 증가 |
