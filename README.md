@@ -159,7 +159,7 @@ Arduino IDE 기준:
 | `BL_PANEL_TIMEOUT_MS` | 4000 | 슬라이더 자동 숨김 시간 |
 | `SHOW_GHOST_SEGMENTS` | 0 | 1로 켜면 꺼진 세그먼트를 옅게 표시 |
 | `AUTO_BL` | 1 | 0으로 끄면 조도 센서 자동 밝기 비활성화 |
-| `LDR_RAW_BRIGHT/DARK` | 300/3600 | 조도 센서 ADC 보정값. `LDR_DEBUG 1`로 raw 값을 찍어 조정 (센서를 가리면 어두움, 조명을 비추면 밝음 값) |
+| `LDR_RAW_BRIGHT/DARK` | 40/1200 | 조도 센서 ADC 보정값(이 보드 실측: 실내 조명 0, 완전 암실 ~1750). 밤에 너무 밝으면 DARK를 내리고, 너무 일찍 어두워지면 올림. `LDR_DEBUG 1`로 raw 확인 |
 | `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
 | `BOOT_BEEP` | 1 | 부팅 시 스피커 확인용 비프음 2회. 0으로 끔 |
