@@ -211,7 +211,7 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // Set to 1 to print raw + mapped touch coordinates on the serial monitor.
 // Note the mapped values are in the unrotated 240x320 space, so they will not
 // line up visually with where you pressed on the rotated screen.
-#define TOUCH_DEBUG 1
+#define TOUCH_DEBUG 0
 
 SPIClass touchscreenSPI = SPIClass(VSPI);
 
@@ -311,14 +311,17 @@ typedef struct {
   uint32_t needle_hm;    // hour and minute needles
 } theme_t;
 
+// Spread across lightness AND hue: two light neutrals, two mid-light and
+// three mid-dark colors, one dark anchor. The dial ink follows each
+// background's tone; the orange segments read well on all of them.
 static const theme_t THEMES[] = {
   { 0xFFFFFF, 0x444444, 0xBBBBBB, 0x333333 },  // white (default)
   { 0xFFF3DC, 0x444444, 0xBBBBBB, 0x333333 },  // warm ivory
-  { 0xE9E9E9, 0x444444, 0xB0B0B0, 0x333333 },  // light gray
-  { 0xDCE9F8, 0x445566, 0xA9BCD0, 0x334455 },  // pale blue
-  { 0x202020, 0xCCCCCC, 0x666666, 0xDDDDDD },  // dark gray
-  { 0x0E1626, 0xC9D4E4, 0x51617A, 0xDCE4F0 },  // navy
-  { 0x1F130A, 0xD8C4AE, 0x6B584A, 0xE8D8C4 },  // dark brown
+  { 0xAEC6DE, 0x2F4358, 0x7E96AC, 0x263A4E },  // mist blue
+  { 0xA9B8A0, 0x394733, 0x7C8B74, 0x2F3D2A },  // sage
+  { 0x3D5A80, 0xD5E2F0, 0x6C87A6, 0xE2ECF7 },  // slate blue
+  { 0x2A6B66, 0xD2E8E5, 0x5E938E, 0xE0F0EE },  // teal
+  { 0x4A3B5E, 0xE0D5EC, 0x7D6C96, 0xEBE2F4 },  // plum
   { 0x000000, 0xCCCCCC, 0x666666, 0xDDDDDD },  // black
 };
 #define THEME_COUNT ((int)(sizeof(THEMES) / sizeof(THEMES[0])))
