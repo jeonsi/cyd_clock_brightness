@@ -63,6 +63,7 @@
 */
 
 #include <lvgl.h>
+#include <lvgl_private.h>   // lv_indev_t internals: the object under the current press
 #include <TFT_eSPI.h>
 
 #include <SPI.h>
@@ -744,8 +745,12 @@ static void alarm_start(uint32_t limit_ms) {
 }
 
 static void alarm_overlay_cb(lv_event_t * e) {
-  LV_UNUSED(e);
   alarm_stop();
+  // The overlay is hidden now, but the finger is still down. Without this
+  // LVGL would look for a new object under the finger on the next frame
+  // and press whatever the overlay was covering (a timer button, the
+  // screen -> brightness panel). Swallow the rest of this touch instead.
+  lv_indev_wait_release(lv_event_get_indev(e));
 }
 
 static void tm_add_cb(lv_event_t * e) {
@@ -833,8 +838,6 @@ static void bl_panel_press_cb(lv_event_t * e) {
 
 // ---- Touch -> LVGL -------------------------------------------------------
 static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
-  LV_UNUSED(indev);
-
   static int32_t  last_x = 0, last_y = 0;
   static uint32_t last_ok_ms = 0;
   static bool     pressed = false;
@@ -986,7 +989,7 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
                   (long)LV_MAX(LV_ABS(peak_dh), LV_ABS(peak_dv)), TOUCH_SWIPE_MIN_PX,
                   (long)peak_flt, TOUCH_TAP_MAX_PX,
                   (long)dbg_step, (long)max_step, TOUCH_MOVE_STEP_PX,
-                  lv_indev_get_active_obj() == NULL || lv_indev_get_active_obj() == lv_screen_active()
+                  indev->pointer.act_obj == NULL || indev->pointer.act_obj == lv_screen_active()
                       ? "on background" : "on widget");
 #endif
 
@@ -1010,8 +1013,12 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     // PRESS_LOST handles the slide-off. Gestures start on the background,
     // labels or the analog dial - everything that lets the press fall
     // through to the screen. Every press is reported to LVGL from its first
-    // confirmed frame, so lv_indev_get_active_obj() is authoritative here.
-    lv_obj_t * act_obj = lv_indev_get_active_obj();
+    // confirmed frame, so indev->pointer.act_obj (the object LVGL pressed;
+    // widgets have PRESS_LOCK, so it stays put for the whole press) is
+    // authoritative here. lv_indev_get_active_obj() is NOT usable: LVGL
+    // clears that global right after calling this read callback, so it is
+    // always NULL in here.
+    lv_obj_t * act_obj = indev->pointer.act_obj;
     bool on_widget = (act_obj != NULL && act_obj != lv_screen_active());
 #if TOUCH_DEBUG
     bool was_pressed = pressed;
