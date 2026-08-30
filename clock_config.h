@@ -294,11 +294,12 @@ static const theme_t THEMES[] = {
 // 부정확하므로 30~40 아래는 권장하지 않음). RELEASE는 PRESS보다 낮거나 같아야 함.
 //   가만히 둬도 유령 터치가 생기면       -> TOUCH_Z_PRESS를 올림(150~300)
 //   가벼운 탭/스와이프가 안 잡히면       -> TOUCH_Z_PRESS를 내림(100; 50까지 내리면 유령 터치)
-//   펜·손가락 드래그가 끊기면            -> TOUCH_Z_RELEASE를 내림(100~50)
-// 실측: 손가락 접촉은 1100~2250, 가벼운 플릭도 500 이상이라 200/150은 손가락 사용에
-// 여유가 있음. 펜촉 드래그 압력은 미확인 - 슬라이더가 끊기면 RELEASE부터 내릴 것.
+//   손가락 드래그가 끊기면               -> TOUCH_Z_RELEASE를 내림(40)
+// 실측: 손가락 '누름'은 1100~2250, 가벼운 플릭도 500 이상이라 시작 문턱 200은 여유가
+// 있음. 반면 손가락으로 '끌' 때는 살짝 떠서 압력이 크게 떨어지므로(펜촉은 괜찮음)
+// 유지 문턱 150에서는 슬라이더 드래그가 끊김 - 50이 검증된 값.
 #define TOUCH_Z_PRESS      200
-#define TOUCH_Z_RELEASE    150
+#define TOUCH_Z_RELEASE    50
 #if TOUCH_Z_RELEASE > TOUCH_Z_PRESS
 #error "TOUCH_Z_RELEASE must not exceed TOUCH_Z_PRESS (hysteresis would be inverted)"
 #endif
