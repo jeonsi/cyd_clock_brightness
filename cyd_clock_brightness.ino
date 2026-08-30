@@ -1034,24 +1034,24 @@ static void timer_cb(lv_timer_t * timer) {
     }
 #endif
 
+    char ampm[4];
+    strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
+    // The analog dial is inherently 12-hour, so its AM/PM tag stays on in
+    // both formats - it is the only thing separating 2 am from 2 pm there.
+    lv_label_set_text(label_a_ampm, ampm);
+
     if (h24) {
       snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
       lv_label_set_text(label_hm, buf);
-      // Empty (not hidden) on the digital face so the seconds keep their
-      // bottom slot in the SPACE_BETWEEN column; hidden on the analog row.
+      // Empty (not hidden) so the seconds keep their bottom slot in the
+      // SPACE_BETWEEN column.
       lv_label_set_text(label_ampm, "");
-      lv_obj_add_flag(label_a_ampm, LV_OBJ_FLAG_HIDDEN);
     } else {
       int h12 = t.tm_hour % 12;
       if (h12 == 0) h12 = 12;
       snprintf(buf, sizeof(buf), "%d:%02d", h12, t.tm_min);
       lv_label_set_text(label_hm, buf);
-
-      char ampm[4];
-      strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
       lv_label_set_text(label_ampm, ampm);
-      lv_label_set_text(label_a_ampm, ampm);
-      lv_obj_remove_flag(label_a_ampm, LV_OBJ_FLAG_HIDDEN);
     }
   }
 
