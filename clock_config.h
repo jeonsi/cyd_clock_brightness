@@ -34,7 +34,7 @@
 
 /* =========================================================================
  * 2. 폰트 선택
- *    번들 폰트: clock_fonts.h(DSEG Italic 68/Bold 68/30/26, 나눔고딕 26),
+ *    번들 폰트: clock_fonts.h(DSEG Italic 68/Bold 68/30/26, DSEG14 Italic 20, 나눔고딕 26),
  *    lunar_font.h(DSEG Italic 26/20 with '.', 나눔고딕 22 서브셋)
  * ========================================================================= */
 
@@ -44,7 +44,9 @@
 #define FONT_SEC      &font_dseg_30        // 초
 #define FONT_DATENUM  &font_dseg_26        // 양력 날짜 숫자
 #define FONT_KR       &font_kr_26          // 한글 요일 (일~토 글리프만 포함)
-#define FONT_AMPM     &lv_font_montserrat_20   // AM/PM, 밝기 %, 버튼 심볼 - lv_conf.h에서 활성화 필요
+// AM/PM. 숫자와 같은 기울기의 14세그먼트 이탤릭(DSEG14). 일반 글꼴로 되돌리려면
+// &lv_font_montserrat_20 (밝기 %·버튼·다이얼 숫자에 계속 쓰이므로 lv_conf.h 활성화는 유지).
+#define FONT_AMPM     &font_dseg14_ampm_20
 #define FONT_LUNAR         &font_kr_lunar_22     // "음"/"윤", 절기·명절 이름
 #define FONT_LUNAR_NUM     &font_dseg_lunar_26   // 음력 숫자(디지털 화면, 달력 제목)
 #define FONT_LUNAR_NUM_SM  &font_dseg_lunar_20   // 음력 숫자(아날로그 정보 열, 작은 것)

@@ -11,7 +11,7 @@ NTP로 시간을 동기화하고, 7세그먼트(DSEG) 디지털 화면과 아날
 ```
         2026-08-23 (일)          ← 날짜(DSEG 26px) + 한글 요일(나눔고딕, 초록색)
 
-                        AM
+                        AM       ← AM/PM (DSEG14 Italic 20px)
         11:58           ──       ← HH:MM (DSEG Bold Italic 68px, 12/24시간제 선택)
                         42       ← 초 (DSEG 30px)
 
@@ -90,14 +90,14 @@ Arduino IDE 기준:
    - `lvgl` (v9)
    - `TFT_eSPI` — CYD용 `User_Setup.h` 설정 필요 ([RNT 가이드](https://RandomNerdTutorials.com/esp32-cyd-lvgl-digital-clock/) 참고)
    - (터치 라이브러리는 불필요 — XPT2046을 SPI로 직접 구동)
-2. **lv_conf.h** 에서 `LV_FONT_MONTSERRAT_20` 활성화 (AM/PM·밝기 % 표시에 사용)
+2. **lv_conf.h** 에서 `LV_FONT_MONTSERRAT_20` 활성화 (밝기 %·버튼 심볼·다이얼 숫자·달력에 사용)
 3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 (`secrets.h`는 gitignore되어 커밋되지 않음)
 4. 필요 시 `TZ_INFO`(타임존) 수정
 5. 파일을 UTF-8로 저장(Arduino IDE 기본값) 후 업로드
 
 ## 폰트 (`clock_fonts.h`)
 
-다섯 개의 LVGL 폰트가 하나의 헤더에 번들되어 있습니다:
+여섯 개의 LVGL 폰트가 하나의 헤더에 번들되어 있습니다:
 
 | 폰트 | 용도 |
 |---|---|
@@ -105,6 +105,7 @@ Arduino IDE 기준:
 | `font_dseg_68` | (예비) DSEG7 Classic Italic 68px |
 | `font_dseg_30` | 초 (Italic 30px, `0-9`) |
 | `font_dseg_26` | 날짜 (Italic 26px, `0-9-`) |
+| `font_dseg14_ampm_20` | AM/PM (DSEG14 Classic Italic 20px, `AMP` — 숫자와 같은 기울기의 14세그먼트 알파벳) |
 | `font_kr_26` | 한글 요일 (나눔고딕 26px, `일월화수목금토` 만 포함) |
 
 음력/절기 줄에는 별도의 `lunar_font.h`에 담긴 두 폰트가 사용됩니다:
