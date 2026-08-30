@@ -39,8 +39,8 @@
     then merge the generated file into clock_fonts.h the same way the other
     fonts are bundled there. Without it this sketch will not link.
 
-    REQUIRED LIBRARY:
-      XPT2046_Touchscreen by Paul Stoffregen  (Library Manager)
+    The XPT2046 touch controller is driven directly over SPI (pressure
+    hysteresis + median/EMA filtering) - no touch library is required.
 
     Save this file as UTF-8 (the Arduino IDE default).
 */
@@ -49,7 +49,6 @@
 #include <TFT_eSPI.h>
 
 #include <SPI.h>
-#include <XPT2046_Touchscreen.h>
 #include <Preferences.h>
 
 #include <WiFi.h>
@@ -137,6 +136,10 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // ======================= Touch (XPT2046) =================================
 // The CYD wires the touch controller to its own SPI bus, separate from the
 // display, so TFT_eSPI's built-in TOUCH_CS support cannot be used here.
+// The XPT2046 is driven directly over SPI (no library): the stock
+// XPT2046_Touchscreen library hardcodes its pressure threshold at 400,
+// which a stylus tip rarely reaches - pen drags kept dropping out - and
+// its 3-sample averaging leaves visible jitter on this panel.
 #define XPT2046_MOSI 32
 #define XPT2046_MISO 39
 #define XPT2046_CLK  25
@@ -163,6 +166,20 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // sees a stream of press/release pairs instead of one continuous drag.
 #define TOUCH_RELEASE_DEBOUNCE_MS 60
 
+// Pressure (Z) hysteresis: a touch starts only above TOUCH_Z_PRESS, but
+// stays alive down to TOUCH_Z_RELEASE. A finger easily exceeds the press
+// level; a stylus hovers around it, and without the low hold level its
+// drags kept breaking up. Raise TOUCH_Z_PRESS if resting dust or a palm
+// triggers phantom touches.
+#define TOUCH_Z_PRESS      300
+#define TOUCH_Z_RELEASE    100
+
+// Per-frame noise handling: TOUCH_SAMPLES reads per axis, sorted, middle
+// half averaged (kills outlier spikes), then an EMA across frames.
+// Lower alpha = smoother but laggier cursor.
+#define TOUCH_SAMPLES      8
+#define TOUCH_FILTER_ALPHA 0.4f
+
 // Swipe (face switch) recognition, done directly in touchscreen_read() so it
 // works no matter which widget sits under the finger (LVGL press events stop
 // at clickable widgets like the analog dial and don't bubble to the screen).
@@ -180,12 +197,61 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 
 SPIClass touchscreenSPI = SPIClass(VSPI);
 
-// The IRQ pin is deliberately left out of the constructor. With it, the
-// library latches on a falling edge and clears the latch whenever pressure
-// dips; mid-drag the line is already low, no new edge arrives, and the drag
-// dies until you lift and press again. Polling over SPI at the indev read
-// rate costs nothing here.
-XPT2046_Touchscreen touchscreen(XPT2046_CS);
+// ---- Raw XPT2046 driver ---------------------------------------------------
+// Polling over SPI at the indev read rate; the PENIRQ pin is not used (an
+// IRQ latch dies mid-drag whenever pressure dips).
+
+// One 12-bit conversion: command byte, then a leading busy bit and 12 data
+// bits arrive over the next two bytes.
+static inline uint16_t xpt_conv(uint8_t cmd) {
+  touchscreenSPI.transfer(cmd);
+  uint16_t hi = touchscreenSPI.transfer(0);
+  uint16_t lo = touchscreenSPI.transfer(0);
+  return (((hi << 8) | lo) >> 3) & 0x0FFF;
+}
+
+// Sort a small sample buffer and average its middle half - median-style
+// filtering that discards the occasional wild outlier entirely.
+static int16_t xpt_median_avg(int16_t * v, int n) {
+  for (int i = 1; i < n; i++) {
+    int16_t t = v[i];
+    int j = i - 1;
+    while (j >= 0 && v[j] > t) { v[j + 1] = v[j]; j--; }
+    v[j + 1] = t;
+  }
+  int32_t sum = 0;
+  int lo = n / 4, hi = n - n / 4;
+  for (int i = lo; i < hi; i++) sum += v[i];
+  return (int16_t)(sum / (hi - lo));
+}
+
+// One touch frame: returns the pressure z; fills *rx/*ry (only when z is at
+// least TOUCH_Z_RELEASE) with coordinates in the same raw space the
+// XPT2046_Touchscreen library produced at rotation 0 (raw_x = 4095 - Y ADC,
+// raw_y = X ADC), so the TOUCH_RAW_* calibration keeps its meaning.
+static int xpt_frame(int32_t * rx, int32_t * ry) {
+  touchscreenSPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  digitalWrite(XPT2046_CS, LOW);
+
+  int z1 = xpt_conv(0xB1);            // Z1, reference kept on
+  int z2 = xpt_conv(0xC1);            // Z2
+  int z = z1 + 4095 - z2;
+
+  if (z >= TOUCH_Z_RELEASE) {
+    int16_t xs[TOUCH_SAMPLES], ys[TOUCH_SAMPLES];
+    xpt_conv(0xD1);                   // first X after driver switch is noisy
+    for (int i = 0; i < TOUCH_SAMPLES; i++) xs[i] = (int16_t)xpt_conv(0xD1);
+    xpt_conv(0x91);                   // same for Y
+    for (int i = 0; i < TOUCH_SAMPLES; i++) ys[i] = (int16_t)xpt_conv(0x91);
+    *rx = 4095 - xpt_median_avg(ys, TOUCH_SAMPLES);
+    *ry = xpt_median_avg(xs, TOUCH_SAMPLES);
+  }
+
+  xpt_conv(0x90);                     // PD=00: power down between frames
+  digitalWrite(XPT2046_CS, HIGH);
+  touchscreenSPI.endTransaction();
+  return z;
+}
 
 // tm_wday: 0 = Sunday
 static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "금", "토"};
@@ -402,13 +468,18 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static bool     pressed = false;
   static int32_t  press_x = 0, press_y = 0;
   static bool     swipe_armed = false;
+  static float    flt_x = 0, flt_y = 0;
 
-  if (touchscreen.touched()) {
-    TS_Point p = touchscreen.getPoint();
+  int32_t rx = 0, ry = 0;
+  int z = xpt_frame(&rx, &ry);
+  // Pressure hysteresis: firm to start, light to keep - a stylus tip's low
+  // pressure can hold a drag it could never have started.
+  bool contact = (z >= (pressed ? TOUCH_Z_RELEASE : TOUCH_Z_PRESS));
 
+  if (contact) {
     // Native 240x320 space. LVGL applies the 270-degree rotation afterwards.
-    int32_t x = map(p.x, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, 0, SCREEN_WIDTH  - 1);
-    int32_t y = map(p.y, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, 0, SCREEN_HEIGHT - 1);
+    int32_t x = map(rx, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, 0, SCREEN_WIDTH  - 1);
+    int32_t y = map(ry, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, 0, SCREEN_HEIGHT - 1);
 
 #if TOUCH_INVERT_X
     x = (SCREEN_WIDTH  - 1) - x;
@@ -422,22 +493,29 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     if (y < 0) y = 0;
     if (y >= SCREEN_HEIGHT) y = SCREEN_HEIGHT - 1;
 
-#if TOUCH_DEBUG
-    Serial.printf("raw=(%d,%d) -> native=(%ld,%ld)\n",
-                  p.x, p.y, (long)x, (long)y);
-#endif
-
     if (!pressed) {
-      // New press: remember where it started. Swipes are ignored while the
-      // brightness panel is open, so dragging the slider never flips faces.
+      // New press: remember where it started and seed the position filter.
+      // Swipes are ignored while the brightness panel is open, so dragging
+      // the slider never flips faces.
+      flt_x = (float)x;
+      flt_y = (float)y;
       press_x = x;
       press_y = y;
       swipe_armed = (bl_panel == NULL) ||
                     lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      // EMA across frames: irons out the remaining wobble during drags
+      flt_x += TOUCH_FILTER_ALPHA * ((float)x - flt_x);
+      flt_y += TOUCH_FILTER_ALPHA * ((float)y - flt_y);
     }
 
-    last_x = x;
-    last_y = y;
+#if TOUCH_DEBUG
+    Serial.printf("z=%d raw=(%ld,%ld) -> native=(%d,%d)\n",
+                  z, (long)rx, (long)ry, (int)(flt_x + 0.5f), (int)(flt_y + 0.5f));
+#endif
+
+    last_x = (int32_t)(flt_x + 0.5f);
+    last_y = (int32_t)(flt_y + 0.5f);
     last_ok_ms = millis();
     pressed = true;
   }
@@ -1087,10 +1165,10 @@ void setup() {
   bl_saved_pct = bl_pct;
   face_mode = prefs.getInt("face", 0);
 
-  // Touch controller on its own SPI bus
+  // Touch controller on its own SPI bus, driven directly (see xpt_frame)
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
-  touchscreen.begin(touchscreenSPI);
-  touchscreen.setRotation(0);   // orientation handled by LVGL, not here
+  pinMode(XPT2046_CS, OUTPUT);
+  digitalWrite(XPT2046_CS, HIGH);
 
   // Start LVGL
   lv_init();

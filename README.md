@@ -54,10 +54,13 @@ NTP로 시간을 동기화하고, 7세그먼트(DSEG) 폰트로 시간·초·날
 - ESP32 Arduino core 2.x / 3.x의 LEDC API 차이를 모두 지원
 
 ### 터치 (XPT2046)
-- CYD는 터치 컨트롤러가 디스플레이와 **별도의 SPI 버스**에 연결되어 있어 TFT_eSPI의 내장 `TOUCH_CS`를 쓸 수 없음 → `XPT2046_Touchscreen` 라이브러리로 직접 처리
+- CYD는 터치 컨트롤러가 디스플레이와 **별도의 SPI 버스**에 연결되어 있어 TFT_eSPI의 내장 `TOUCH_CS`를 쓸 수 없음
+- **라이브러리 없이 SPI로 직접 구동** — `XPT2046_Touchscreen` 라이브러리는 압력 임계값(400)이 하드코딩되어 있어 펜(스타일러스) 드래그가 끊기고, 3샘플 평균만으로는 슬라이더가 흔들림
+- **압력 히스테리시스** — 터치 시작은 `TOUCH_Z_PRESS`(300) 이상, 유지는 `TOUCH_Z_RELEASE`(100)까지 허용. 펜촉의 약한 압력으로도 드래그가 유지됨
+- **노이즈 필터** — 축당 8샘플을 정렬해 중간 절반만 평균(이상치 제거) + 프레임 간 EMA(α=0.4)로 드래그 중 흔들림 억제
 - IRQ 핀을 의도적으로 사용하지 않고 폴링 — IRQ 래치 방식은 드래그 중 압력이 약해지면 드래그가 끊김
 - 60 ms 릴리즈 디바운스 — 저항막 패널 특유의 드래그 중 순간 접촉 끊김을 흡수
-- 이 패널에서 실측한 raw 좌표 범위(`620..3440` / `500..3600`)로 캘리브레이션되어 있음
+- 이 패널에서 실측한 raw 좌표 범위(`620..3440` / `500..3600`)로 캘리브레이션되어 있음 (기존 라이브러리 rotation 0과 같은 좌표계 유지)
 - LVGL 9는 포인터 좌표 회전을 자체 처리하므로, 읽기 콜백은 네이티브 240×320 좌표만 보고함
 
 ## 하드웨어
@@ -77,7 +80,7 @@ Arduino IDE 기준:
 1. **라이브러리 설치** (Library Manager)
    - `lvgl` (v9)
    - `TFT_eSPI` — CYD용 `User_Setup.h` 설정 필요 ([RNT 가이드](https://RandomNerdTutorials.com/esp32-cyd-lvgl-digital-clock/) 참고)
-   - `XPT2046_Touchscreen` (Paul Stoffregen)
+   - (터치 라이브러리는 불필요 — XPT2046을 SPI로 직접 구동)
 2. **lv_conf.h** 에서 `LV_FONT_MONTSERRAT_20` 활성화 (AM/PM·밝기 % 표시에 사용)
 3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 (`secrets.h`는 gitignore되어 커밋되지 않음)
 4. 필요 시 `TZ_INFO`(타임존) 수정
@@ -141,6 +144,9 @@ Arduino IDE 기준:
 | `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
 | `TOUCH_SWIPE_MIN_PX` | 30 | 스와이프로 인식할 최소 가로 이동 거리(px). 속도 무관, 누른 지점→뗀 지점 변위로만 판정 |
+| `TOUCH_Z_PRESS/RELEASE` | 300/100 | 터치 시작/유지 압력 임계값. 유령 터치가 생기면 PRESS를 올리고, 펜 드래그가 끊기면 RELEASE를 내림 |
+| `TOUCH_SAMPLES` | 8 | 축당 샘플 수(중간 절반 평균). 늘리면 더 안정, 읽기 시간 증가 |
+| `TOUCH_FILTER_ALPHA` | 0.4 | 프레임 간 EMA 계수. 낮추면 더 부드럽지만 커서 반응이 느려짐 |
 | `TOUCH_RAW_MIN/MAX_X/Y` | 실측값 | 터치 캘리브레이션. 패널마다 다르므로 `TOUCH_DEBUG 1`로 raw 값을 찍어 조정 |
 | `TOUCH_DEBUG` | 0 | 1로 켜면 시리얼로 터치 좌표 출력 |
 
