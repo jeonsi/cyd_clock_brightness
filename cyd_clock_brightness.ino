@@ -11,6 +11,12 @@
       - bottom line shows the Korean lunar date and the current solar
         term, e.g. "음 7.11  입추" (tables in korean_calendar.h,
         NanumGothic subset font in lunar_font.h)
+      - holiday / festival names on the bottom line (설날, 추석, 단오, ...)
+        and the solar term highlighted in green on its 절입 day
+      - non-blocking boot: the panel shows Wi-Fi / NTP progress and retries
+        forever instead of hanging on a black screen
+      - ambient auto-brightness from the CYD's LDR on GPIO 34; the slider
+        sets the ceiling, darkness dims toward BL_AUTO_MIN_PCT of it
       - every field has a fixed width so nothing shifts when the digits change
       - touch the screen to bring up a backlight brightness slider
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
@@ -107,6 +113,25 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 
 #define BL_PANEL_TIMEOUT_MS 4000   // auto-hide the slider after this idle time
 
+// ======================= Ambient light (LDR) ==============================
+// The CYD has a photoresistor on GPIO 34 (input-only, ADC1). It scales the
+// user's brightness setting: the slider sets the ceiling, ambient light
+// decides how much of it is used, down to BL_AUTO_MIN_PCT in full darkness.
+// While the slider panel is open the scaling is suspended (factor 100%) so
+// the user sees the true range they are setting.
+#define AUTO_BL          1     // 0 disables ambient dimming entirely
+#define LDR_PIN          34
+// Raw ADC endpoints of the mapping, with 11 dB attenuation. Calibrate with
+// LDR_DEBUG 1: cover the sensor for the dark value, shine a lamp at it for
+// the bright one. Swapped endpoints (bright > dark) also work.
+#define LDR_RAW_BRIGHT   300
+#define LDR_RAW_DARK     3600
+#define BL_AUTO_MIN_PCT  15    // % of the user setting kept in full darkness
+#define LDR_DEBUG        0
+
+// ======================= Boot / connectivity ==============================
+#define WIFI_RETRY_MS   (30 * 1000)   // re-issue WiFi.begin() this often
+
 // ======================= Touch (XPT2046) =================================
 // The CYD wires the touch controller to its own SPI bus, separate from the
 // display, so TFT_eSPI's built-in TOUCH_CS support cannot be used here.
@@ -153,103 +178,32 @@ XPT2046_Touchscreen touchscreen(XPT2046_CS);
 // tm_wday: 0 = Sunday
 static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "금", "토"};
 
-// ======================= Korean public holidays ==========================
-// The weekday is drawn in red on Sundays and on the dates below.
+// ======================= Calendar colors ==================================
+// The holiday date table itself lives in korean_calendar.h (kr_holiday_name,
+// kr_is_red_day, kr_lunar_festival).
 #define WEEKDAY_COLOR_NORMAL  lv_color_hex(0x33CC66)
 #define WEEKDAY_COLOR_HOLIDAY lv_color_hex(0xE60000)
 
-// YYYYMMDD, sorted. Covers 2026-2030 including substitute holidays.
-// 제헌절 is a statutory public holiday again from 2026 (법률 제21338호).
-// Extend this table as the years run out - the lunar holidays (설날, 추석,
-// 부처님오신날) and the substitute days cannot be computed from tm alone.
-static const uint32_t HOLIDAYS_KR[] = {
-  // 2026
-  20260101,                               // 신정
-  20260216, 20260217, 20260218,           // 설날
-  20260301, 20260302,                     // 삼일절 + 대체
-  20260505,                               // 어린이날
-  20260524, 20260525,                     // 부처님오신날 + 대체
-  20260606,                               // 현충일
-  20260717,                               // 제헌절
-  20260815, 20260817,                     // 광복절 + 대체
-  20260924, 20260925, 20260926,           // 추석
-  20261003, 20261005,                     // 개천절 + 대체
-  20261009,                               // 한글날
-  20261225,                               // 크리스마스
-  // 2027
-  20270101,
-  20270206, 20270207, 20270208, 20270209, // 설날 + 대체
-  20270301,
-  20270505,
-  20270513,                               // 부처님오신날
-  20270606,
-  20270717, 20270719,                     // 제헌절 + 대체
-  20270815, 20270816,                     // 광복절 + 대체
-  20270914, 20270915, 20270916,           // 추석
-  20271003, 20271004,                     // 개천절 + 대체
-  20271009, 20271011,                     // 한글날 + 대체
-  20271225, 20271227,                     // 크리스마스 + 대체
-  // 2028
-  20280101,
-  20280126, 20280127, 20280128,           // 설날
-  20280301,
-  20280502,                               // 부처님오신날
-  20280505,
-  20280606,
-  20280717,
-  20280815,
-  20281002, 20281003, 20281004, 20281005, // 추석(개천절 겹침) + 대체
-  20281009,
-  20281225,
-  // 2029
-  20290101,
-  20290212, 20290213, 20290214,           // 설날
-  20290301,
-  20290505, 20290507,                     // 어린이날 + 대체
-  20290520, 20290521,                     // 부처님오신날 + 대체
-  20290606,
-  20290717,
-  20290815,
-  20290921, 20290922, 20290923, 20290924, // 추석 + 대체
-  20291003,
-  20291009,
-  20291225,
-  // 2030
-  20300101,
-  20300202, 20300203, 20300204, 20300205, // 설날 + 대체
-  20300301,
-  20300505, 20300506,                     // 어린이날 + 대체
-  20300509,                               // 부처님오신날
-  20300606,
-  20300717,
-  20300815,
-  20300911, 20300912, 20300913,           // 추석
-  20301003,
-  20301009,
-  20301225,
-};
-
-// Sunday or a listed public holiday. Called once per day change, so a
-// linear scan over ~100 entries costs nothing.
-static bool is_red_day(const struct tm * t) {
-  if (t->tm_wday == 0) return true;
-  uint32_t ymd = (uint32_t)(t->tm_year + 1900) * 10000u
-               + (uint32_t)(t->tm_mon + 1) * 100u
-               + (uint32_t)t->tm_mday;
-  for (size_t i = 0; i < sizeof(HOLIDAYS_KR) / sizeof(HOLIDAYS_KR[0]); i++) {
-    if (HOLIDAYS_KR[i] == ymd) return true;
-  }
-  return false;
-}
+#define EVENT_HOLIDAY_COLOR   WEEKDAY_COLOR_HOLIDAY   // 설날, 추석, ...
+#define EVENT_FESTIVAL_COLOR  lv_color_hex(0x33CC66)  // 정월대보름, 단오, 칠석
+#define TERM_TODAY_COLOR      lv_color_hex(0x33CC66)  // 절기 당일 강조
 
 static lv_obj_t * label_ampm;
 static lv_obj_t * label_hm;
 static lv_obj_t * label_sec;
 static lv_obj_t * label_datenum;
 static lv_obj_t * label_wd;
+static lv_obj_t * label_lunar_event; // holiday / festival name
 static lv_obj_t * label_lunar_pre;   // "음" / "음 윤"
 static lv_obj_t * label_lunar_num;   // "7.11" in DSEG
 static lv_obj_t * label_lunar_term;  // current solar term
+
+enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
+static boot_state_t boot_state = BOOT_WIFI;
+static lv_obj_t *   boot_label;
+static uint32_t     boot_t0;
+static uint32_t     wifi_attempt_ms;
+static int          wifi_attempts = 1;
 
 static lv_obj_t * bl_panel;
 static lv_obj_t * bl_slider;
@@ -259,6 +213,8 @@ static Preferences prefs;
 static int      bl_pct = BL_DEFAULT;
 static int      bl_saved_pct = -1;
 static uint32_t bl_last_touch_ms = 0;
+static int      bl_auto_factor = 100;   // % of bl_pct, driven by the LDR
+static float    ldr_ema = -1.0f;
 
 void log_print(lv_log_level_t level, const char * buf) {
   LV_UNUSED(level);
@@ -290,12 +246,47 @@ static uint32_t bl_pct_to_duty(int pct) {
 }
 
 static void bl_apply(void) {
+  int pct = bl_pct * bl_auto_factor / 100;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-  ledcWrite(BL_PIN, bl_pct_to_duty(bl_pct));
+  ledcWrite(BL_PIN, bl_pct_to_duty(pct));
 #else
-  ledcWrite(BL_CHANNEL, bl_pct_to_duty(bl_pct));
+  ledcWrite(BL_CHANNEL, bl_pct_to_duty(pct));
 #endif
 }
+
+#if AUTO_BL
+// Called at the indev/timer rate (200 ms). EMA smoothing keeps the panel
+// from pumping when a hand or shadow passes over the sensor.
+static void auto_bl_update(void) {
+  int raw = analogRead(LDR_PIN);
+  ldr_ema = (ldr_ema < 0) ? (float)raw : ldr_ema + 0.1f * ((float)raw - ldr_ema);
+
+#if LDR_DEBUG
+  static uint32_t dbg_ms = 0;
+  if (millis() - dbg_ms > 1000) {
+    dbg_ms = millis();
+    Serial.printf("LDR raw=%d ema=%.0f factor=%d%%\n", raw, ldr_ema, bl_auto_factor);
+  }
+#endif
+
+  int target;
+  if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN)) {
+    target = 100;   // full range while the user is adjusting
+  } else {
+    float x = ((float)LDR_RAW_DARK - ldr_ema)
+            / ((float)LDR_RAW_DARK - (float)LDR_RAW_BRIGHT);  // 1 bright .. 0 dark
+    if (x < 0.0f) x = 0.0f;
+    if (x > 1.0f) x = 1.0f;
+    target = BL_AUTO_MIN_PCT + (int)(x * (100 - BL_AUTO_MIN_PCT) + 0.5f);
+  }
+
+  // 2% deadband so tiny ADC noise does not cause continuous PWM rewrites
+  if (target - bl_auto_factor >= 2 || bl_auto_factor - target >= 2) {
+    bl_auto_factor = target;
+    bl_apply();
+  }
+}
+#endif
 
 static void bl_begin(void) {
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -484,23 +475,59 @@ static void timer_cb(lv_timer_t * timer) {
     snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[t.tm_wday]);
     lv_label_set_text(label_wd, buf);
     lv_obj_set_style_text_color(label_wd,
-        is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL, 0);
+        kr_is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL, 0);
 
-    // Bottom line: lunar date + current solar-term period, e.g. "음 7.11  입추".
-    // Either part is dropped silently once its table runs out of years.
+    // Bottom line: [holiday/festival name] 음 7.11  입추.
+    // Hidden labels are skipped by the flex row, so empty parts leave no gap.
+    // Each part is dropped silently once its table runs out of years.
+    uint32_t ymd = (uint32_t)(t.tm_year + 1900) * 10000u
+                 + (uint32_t)(t.tm_mon + 1) * 100u
+                 + (uint32_t)t.tm_mday;
+
     klc_date_t ld;
-    const char * term = kst_current_term(&t);
-    if (klc_solar_to_lunar(&t, &ld)) {
+    bool have_lunar = klc_solar_to_lunar(&t, &ld);
+
+    const char * ev = kr_holiday_name(ymd);
+    lv_color_t evc = EVENT_HOLIDAY_COLOR;
+    if (!ev && have_lunar) {
+      ev = kr_lunar_festival(&ld);
+      evc = EVENT_FESTIVAL_COLOR;
+    }
+    if (ev) {
+      lv_label_set_text(label_lunar_event, ev);
+      lv_obj_set_style_text_color(label_lunar_event, evc, 0);
+      lv_obj_remove_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (have_lunar) {
       char nbuf[12];
       lv_label_set_text(label_lunar_pre, ld.leap ? "음 윤" : "음");
       snprintf(nbuf, sizeof(nbuf), "%d.%d", ld.month, ld.day);
       lv_label_set_text(label_lunar_num, nbuf);
+      lv_obj_remove_flag(label_lunar_pre, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(label_lunar_num, LV_OBJ_FLAG_HIDDEN);
     } else {
-      lv_label_set_text(label_lunar_pre, "");
-      lv_label_set_text(label_lunar_num, "");
+      lv_obj_add_flag(label_lunar_pre, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(label_lunar_num, LV_OBJ_FLAG_HIDDEN);
     }
-    lv_label_set_text(label_lunar_term, term ? term : "");
+
+    bool term_today = false;
+    const char * term = kst_current_term(&t, &term_today);
+    if (term) {
+      lv_label_set_text(label_lunar_term, term);
+      lv_obj_set_style_text_color(label_lunar_term,
+          term_today ? TERM_TODAY_COLOR : LUNAR_COLOR, 0);
+      lv_obj_remove_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
+    }
   }
+
+#if AUTO_BL
+  auto_bl_update();
+#endif
 
   // Hide the brightness panel once the user stops touching it
   if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN) &&
@@ -688,6 +715,13 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_pad_column(lunar_row, 8, 0);
   lv_obj_set_style_text_color(lunar_row, LUNAR_COLOR, 0);
 
+  label_lunar_event = lv_label_create(lunar_row);
+  lv_label_set_text(label_lunar_event, "");
+  lv_obj_add_style(label_lunar_event, &style_lunar, 0);
+  lv_obj_set_style_translate_y(label_lunar_event, 3, 0);
+  lv_obj_set_style_pad_right(label_lunar_event, 6, 0);
+  lv_obj_add_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
+
   label_lunar_pre = lv_label_create(lunar_row);
   lv_label_set_text(label_lunar_pre, "");
   lv_obj_add_style(label_lunar_pre, &style_lunar, 0);
@@ -711,6 +745,73 @@ void lv_create_main_gui(void) {
   lv_timer_ready(timer);
 }
 
+// ---- Boot state machine ---------------------------------------------------
+// The display comes up immediately with a status line; Wi-Fi and the first
+// NTP sync happen in the background so a dead router can never leave the
+// panel black with no explanation. Wi-Fi retries forever (a clock has
+// nothing better to do), visibly counting attempts.
+static void sntp_begin(void) {
+  sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+  sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);   // slew the clock instead of jumping
+  configTzTime(TZ_INFO, "kr.pool.ntp.org", "pool.ntp.org", "time.google.com");
+  sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
+  sntp_restart();                              // apply the new interval
+}
+
+static void boot_poll(void) {
+  static uint32_t last_ui_ms = 0;
+  char buf[64];
+
+  switch (boot_state) {
+
+    case BOOT_WIFI:
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("Connected to Wi-Fi network with IP Address: ");
+        Serial.println(WiFi.localIP());
+        sntp_begin();
+        boot_t0 = millis();
+        lv_label_set_text(boot_label, "Waiting for time sync...");
+        boot_state = BOOT_NTP;
+        break;
+      }
+      if (millis() - wifi_attempt_ms > WIFI_RETRY_MS) {
+        wifi_attempt_ms = millis();
+        wifi_attempts++;
+        Serial.printf("Wi-Fi retry #%d\n", wifi_attempts);
+        WiFi.disconnect();
+        WiFi.begin(ssid, password);
+      }
+      if (millis() - last_ui_ms > 1000) {
+        last_ui_ms = millis();
+        snprintf(buf, sizeof(buf), "Connecting to Wi-Fi... %lus (try %d)",
+                 (unsigned long)((millis() - boot_t0) / 1000), wifi_attempts);
+        lv_label_set_text(boot_label, buf);
+      }
+      break;
+
+    case BOOT_NTP: {
+      struct tm t;
+      if (getLocalTime(&t, 0)) {
+        lv_obj_delete(boot_label);
+        boot_label = NULL;
+        lv_create_main_gui();
+        boot_state = BOOT_DONE;
+        break;
+      }
+      if (millis() - last_ui_ms > 1000) {
+        last_ui_ms = millis();
+        snprintf(buf, sizeof(buf), "Waiting for time sync... %lus",
+                 (unsigned long)((millis() - boot_t0) / 1000));
+        lv_label_set_text(boot_label, buf);
+      }
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
@@ -720,29 +821,6 @@ void setup() {
   prefs.begin("clock", false);
   bl_pct = prefs.getInt("bl", BL_DEFAULT);
   bl_saved_pct = bl_pct;
-
-  // Connect to Wi-Fi
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.print("\nConnected to Wi-Fi network with IP Address: ");
-  Serial.println(WiFi.localIP());
-
-  // Start the SNTP client. It keeps the system clock disciplined on its own.
-  sntp_set_time_sync_notification_cb(time_sync_notification_cb);
-  sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);   // slew the clock instead of jumping
-  configTzTime(TZ_INFO, "kr.pool.ntp.org", "pool.ntp.org", "time.google.com");
-  sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
-  sntp_restart();                              // apply the new interval
-
-  // Wait for the first sync before drawing anything
-  struct tm t;
-  while (!getLocalTime(&t, 1000)) {
-    Serial.println("Waiting for NTP time...");
-  }
 
   // Touch controller on its own SPI bus
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
@@ -764,14 +842,31 @@ void setup() {
   // does not fight the PWM channel.
   bl_begin();
 
+#if AUTO_BL
+  analogSetPinAttenuation(LDR_PIN, ADC_11db);
+#endif
+
   lv_indev_t * indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touchscreen_read);
 
-  lv_create_main_gui();
+  // Boot status screen, replaced by the clock once time is known
+  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
+  boot_label = lv_label_create(lv_screen_active());
+  lv_obj_set_style_text_font(boot_label, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(boot_label, lv_color_hex(0x555555), 0);
+  lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
+  lv_obj_center(boot_label);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(ssid, password);
+  boot_t0 = wifi_attempt_ms = millis();
 }
 
 void loop() {
   lv_task_handler();  // let the GUI do its work
+  if (boot_state != BOOT_DONE) boot_poll();
   delay(5);
 }

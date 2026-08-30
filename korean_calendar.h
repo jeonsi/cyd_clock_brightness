@@ -138,8 +138,10 @@ static const uint16_t TERM_DATES[KST_LAST_YEAR - KST_FIRST_YEAR + 1][24] = {
 
 /* Name of the solar-term period the date falls in, i.e. the most recent
  * term on or before it. Jan 1..4 belongs to the previous year's 동지.
+ * *is_today is set when the date is the 절입 day itself.
  * NULL outside the table range. */
-static const char * kst_current_term(const struct tm * t) {
+static const char * kst_current_term(const struct tm * t, bool * is_today) {
+  if (is_today) *is_today = false;
   int y = t->tm_year + 1900;
   if (y < KST_FIRST_YEAR || y > KST_LAST_YEAR) return NULL;
   uint16_t md = (uint16_t)((t->tm_mon + 1) * 100 + t->tm_mday);
@@ -150,7 +152,117 @@ static const char * kst_current_term(const struct tm * t) {
     if (row[i] <= md) idx = i;
     else break;
   }
+  if (is_today && row[idx] == md) *is_today = true;
   return TERM_KR[idx];
+}
+
+/* ======================= Public holidays ================================ */
+
+/* YYYYMMDD, sorted. Covers 2026-2030 including substitute holidays.
+ * 제헌절 is a statutory public holiday again from 2026 (법률 제21338호).
+ * Extend this table as the years run out - the lunar holidays (설날, 추석,
+ * 부처님오신날) and the substitute days cannot be computed from tm alone. */
+typedef struct {
+  uint32_t ymd;
+  const char * name;
+} kr_holiday_t;
+
+static const kr_holiday_t KR_HOLIDAYS[] = {
+  /* 2026 */
+  { 20260101, "신정" },
+  { 20260216, "설날" }, { 20260217, "설날" }, { 20260218, "설날" },
+  { 20260301, "삼일절" }, { 20260302, "대체휴일" },
+  { 20260505, "어린이날" },
+  { 20260524, "부처님오신날" }, { 20260525, "대체휴일" },
+  { 20260606, "현충일" },
+  { 20260717, "제헌절" },
+  { 20260815, "광복절" }, { 20260817, "대체휴일" },
+  { 20260924, "추석" }, { 20260925, "추석" }, { 20260926, "추석" },
+  { 20261003, "개천절" }, { 20261005, "대체휴일" },
+  { 20261009, "한글날" },
+  { 20261225, "크리스마스" },
+  /* 2027 */
+  { 20270101, "신정" },
+  { 20270206, "설날" }, { 20270207, "설날" }, { 20270208, "설날" },
+  { 20270209, "대체휴일" },
+  { 20270301, "삼일절" },
+  { 20270505, "어린이날" },
+  { 20270513, "부처님오신날" },
+  { 20270606, "현충일" },
+  { 20270717, "제헌절" }, { 20270719, "대체휴일" },
+  { 20270815, "광복절" }, { 20270816, "대체휴일" },
+  { 20270914, "추석" }, { 20270915, "추석" }, { 20270916, "추석" },
+  { 20271003, "개천절" }, { 20271004, "대체휴일" },
+  { 20271009, "한글날" }, { 20271011, "대체휴일" },
+  { 20271225, "크리스마스" }, { 20271227, "대체휴일" },
+  /* 2028 */
+  { 20280101, "신정" },
+  { 20280126, "설날" }, { 20280127, "설날" }, { 20280128, "설날" },
+  { 20280301, "삼일절" },
+  { 20280502, "부처님오신날" },
+  { 20280505, "어린이날" },
+  { 20280606, "현충일" },
+  { 20280717, "제헌절" },
+  { 20280815, "광복절" },
+  { 20281002, "추석" }, { 20281003, "추석" }, { 20281004, "추석" },
+  { 20281005, "대체휴일" },   /* 개천절 coincides with 추석 */
+  { 20281009, "한글날" },
+  { 20281225, "크리스마스" },
+  /* 2029 */
+  { 20290101, "신정" },
+  { 20290212, "설날" }, { 20290213, "설날" }, { 20290214, "설날" },
+  { 20290301, "삼일절" },
+  { 20290505, "어린이날" }, { 20290507, "대체휴일" },
+  { 20290520, "부처님오신날" }, { 20290521, "대체휴일" },
+  { 20290606, "현충일" },
+  { 20290717, "제헌절" },
+  { 20290815, "광복절" },
+  { 20290921, "추석" }, { 20290922, "추석" }, { 20290923, "추석" },
+  { 20290924, "대체휴일" },
+  { 20291003, "개천절" },
+  { 20291009, "한글날" },
+  { 20291225, "크리스마스" },
+  /* 2030 */
+  { 20300101, "신정" },
+  { 20300202, "설날" }, { 20300203, "설날" }, { 20300204, "설날" },
+  { 20300205, "대체휴일" },
+  { 20300301, "삼일절" },
+  { 20300505, "어린이날" }, { 20300506, "대체휴일" },
+  { 20300509, "부처님오신날" },
+  { 20300606, "현충일" },
+  { 20300717, "제헌절" },
+  { 20300815, "광복절" },
+  { 20300911, "추석" }, { 20300912, "추석" }, { 20300913, "추석" },
+  { 20301003, "개천절" },
+  { 20301009, "한글날" },
+  { 20301225, "크리스마스" },
+};
+
+/* Holiday name for a YYYYMMDD date, NULL when it is a working day.
+ * Called once per day change, so a linear scan costs nothing. */
+static const char * kr_holiday_name(uint32_t ymd) {
+  for (size_t i = 0; i < sizeof(KR_HOLIDAYS) / sizeof(KR_HOLIDAYS[0]); i++) {
+    if (KR_HOLIDAYS[i].ymd == ymd) return KR_HOLIDAYS[i].name;
+  }
+  return NULL;
+}
+
+/* Sunday or a listed public holiday: draw the weekday in red. */
+static bool kr_is_red_day(const struct tm * t) {
+  if (t->tm_wday == 0) return true;
+  uint32_t ymd = (uint32_t)(t->tm_year + 1900) * 10000u
+               + (uint32_t)(t->tm_mon + 1) * 100u
+               + (uint32_t)t->tm_mday;
+  return kr_holiday_name(ymd) != NULL;
+}
+
+/* Non-holiday seasonal festivals tied to the lunar date. */
+static const char * kr_lunar_festival(const klc_date_t * ld) {
+  if (ld->leap) return NULL;
+  if (ld->month == 1 && ld->day == 15) return "정월대보름";
+  if (ld->month == 5 && ld->day == 5)  return "단오";
+  if (ld->month == 7 && ld->day == 7)  return "칠석";
+  return NULL;
 }
 
 #endif /* KOREAN_CALENDAR_H */
