@@ -502,6 +502,11 @@ static void bl_panel_show(void) {
   bl_last_touch_ms = millis();
 }
 
+static void bl_panel_hide(void) {
+  lv_obj_add_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
+  bl_store();
+}
+
 static void bl_slider_cb(lv_event_t * e) {
   LV_UNUSED(e);
   bl_set_pct(lv_slider_get_value(bl_slider));
@@ -600,13 +605,20 @@ static void face_apply(void) {
   }
 }
 
-// A tap anywhere on the clock face opens the panel. Swipes are detected in
+// A tap anywhere on the clock face toggles the panel: open when hidden,
+// and - after an accidental tap - a second tap outside the panel dismisses
+// it immediately instead of waiting out the 4 s timeout. Taps ON the panel
+// only keep it alive (bl_panel_press_cb). Swipes are detected in
 // touchscreen_read() (which stamps last_gesture_ms before this fires), so
 // the CLICKED at the end of a swipe is filtered out here.
 static void screen_click_cb(lv_event_t * e) {
   LV_UNUSED(e);
   if (millis() - last_gesture_ms < 600) return;
-  bl_panel_show();
+  if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN)) {
+    bl_panel_hide();
+  } else {
+    bl_panel_show();
+  }
 }
 
 // Pressing the panel background (not the slider) just keeps it alive
@@ -904,8 +916,7 @@ static void timer_cb(lv_timer_t * timer) {
   // Hide the brightness panel once the user stops touching it
   if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN) &&
       (millis() - bl_last_touch_ms) > BL_PANEL_TIMEOUT_MS) {
-    lv_obj_add_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
-    bl_store();
+    bl_panel_hide();
   }
 }
 
