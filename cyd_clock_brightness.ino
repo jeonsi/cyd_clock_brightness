@@ -666,14 +666,12 @@ static void sw_lap_record(void) {
 
 static void sw_lap_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (!sw_running) return;   // laps only make sense while running
   sw_lap_record();
 }
 
 static void sw_start_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;   // swipe tail, not a press
   if (sw_running) {
     sw_accum_ms += millis() - sw_t0;
     sw_running = false;
@@ -689,7 +687,6 @@ static void sw_start_cb(lv_event_t * e) {
 
 static void sw_reset_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   sw_running = false;
   sw_accum_ms = 0;
   sw_lap_shown = 0;
@@ -768,7 +765,6 @@ static void alarm_overlay_cb(lv_event_t * e) {
 }
 
 static void tm_add_cb(lv_event_t * e) {
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   uint32_t add_min = (uint32_t)(intptr_t)lv_event_get_user_data(e);
   tm_left_ms += add_min * 60000u;
   if (tm_left_ms > TIMER_MAX_MS) tm_left_ms = TIMER_MAX_MS;
@@ -777,7 +773,6 @@ static void tm_add_cb(lv_event_t * e) {
 
 static void tm_start_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (!tm_running && tm_left_ms == 0) return;   // nothing to count down
   tm_running = !tm_running;
   if (tm_running) tm_last_ms = millis();
@@ -786,7 +781,6 @@ static void tm_start_cb(lv_event_t * e) {
 
 static void tm_reset_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   tm_running = false;
   tm_left_ms = 0;
   lv_label_set_text(lbl_tm_start, LV_SYMBOL_PLAY);
@@ -1467,7 +1461,6 @@ static void al_update_label(void) {
 }
 
 static void al_sel_cb(lv_event_t * e) {
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   al_sel = (int)(intptr_t)lv_event_get_user_data(e);
   al_update_label();
 }
@@ -1496,7 +1489,6 @@ static void al_adjust_cb(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if (code == LV_EVENT_CLICKED) {
     if (repeated) { repeated = false; return; }
-    if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   } else {
     repeated = true;
   }
@@ -1513,7 +1505,6 @@ static void al_adjust_cb(lv_event_t * e) {
 
 static void al_toggle_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   alarms[al_sel].enabled = !alarms[al_sel].enabled;
   al_update_label();
   al_mark_dirty();
@@ -1522,7 +1513,6 @@ static void al_toggle_cb(lv_event_t * e) {
 // Weekday toggles (user_data = tm_wday); the last selected day cannot be
 // cleared, so the alarm always has at least one day to ring on.
 static void al_day_cb(lv_event_t * e) {
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   int d = (int)(intptr_t)lv_event_get_user_data(e);
   alarm_t * a = &alarms[al_sel];
   uint8_t next = a->days ^ (uint8_t)(1 << d);
@@ -1538,7 +1528,6 @@ static void al_day_cb(lv_event_t * e) {
 // turning it off restores the days that were selected before.
 static void al_once_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   alarm_t * a = &alarms[al_sel];
   a->once = !a->once;
   if (a->once) {
@@ -1555,7 +1544,6 @@ static void al_once_cb(lv_event_t * e) {
 // next face (swipes work here too).
 static void al_done_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (al_dirty) al_save_now();
   face_mode = (face_mode + 1) % FACE_COUNT;
   face_apply();
@@ -1580,7 +1568,6 @@ static void time_fmt_apply(void) {
 
 static void h24_btn_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   h24 = !h24;
   prefs.putInt("h24", h24 ? 1 : 0);
   time_fmt_apply();

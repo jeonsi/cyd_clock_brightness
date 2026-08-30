@@ -182,7 +182,7 @@ Arduino IDE 기준:
 | `TOUCH_PRESS_CONFIRM_FRAMES` | 1 | 눌림 확정 전 건너뛸 접촉 프레임 수(10ms 주기에서 10ms). 0이면 즉시, 2면 더 보수적 |
 | `TOUCH_RELEASE_DEBOUNCE_MS` | 100 | 드래그 중 순간 접촉 끊김을 눌린 상태로 유지하는 시간 |
 | `TOUCH_MOVE_STEP_PX` | 6 | 탭으로 인정할 최대 프레임당 이동(px). 그 이상 빠르면 총 이동이 짧아도 탭 아님(플릭 판정의 속도 기준으로도 사용) |
-| `TOUCH_TAP_GUARD_MS` | 300 | 스와이프 직후 클릭을 무시하는 시간 |
+| `TOUCH_TAP_GUARD_MS` | 300 | 스와이프 직후 바탕 클릭(밝기 패널 열기)을 무시하는 시간. 버튼에는 적용되지 않음 |
 | `TOUCH_TAP_MAX_PX` | 60 | 탭으로 인정할 최대 이동(px, 필터된 좌표 기준). 그 이상~스와이프 미만은 끊긴 스와이프로 간주해 무시 |
 | `TOUCH_Z_PRESS/RELEASE` | 100/50 | 터치 시작/유지 압력 임계값. 유령 터치가 생기면 PRESS를 올리고, 펜 드래그가 끊기면 RELEASE를 내림 |
 | `TOUCH_SAMPLES` | 8 | 축당 샘플 수(중간 절반 평균). 늘리면 더 안정, 읽기 시간 증가 |
