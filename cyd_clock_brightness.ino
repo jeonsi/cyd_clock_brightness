@@ -843,8 +843,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static int32_t  peak_dh = 0, peak_dv = 0;         // largest RAW travel this press (swipes)
   static int32_t  peak_flt = 0;                     // largest FILTERED travel (tap test)
   static int      confirm_left = -1;                // press-confirmation frames still to skip
-  static int32_t  pend_x = 0, pend_y = 0;           // coords of the last skipped (pending) frame
-  static int      pend_z = 0;                       // its pressure
   static bool     swipe_armed = false;
   static float    flt_x = 0, flt_y = 0;
   static int32_t  prev_x = 0, prev_y = 0;           // previous raw sample, for per-frame speed
@@ -897,9 +895,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       if (confirm_left < 0) confirm_left = TOUCH_PRESS_CONFIRM_FRAMES;
       if (confirm_left > 0) {
         confirm_left--;
-        pend_x = x;
-        pend_y = y;
-        pend_z = z;
         data->point.x = last_x;
         data->point.y = last_y;
         data->state = LV_INDEV_STATE_RELEASED;
@@ -978,28 +973,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     last_y = (int32_t)(flt_y + 0.5f);
     last_ok_ms = millis();
     pressed = true;
-  }
-  else if (!pressed && confirm_left >= 0 && confirm_left < TOUCH_PRESS_CONFIRM_FRAMES &&
-           pend_z >= TOUCH_Z_SHORT_TAP) {
-    // The contact ended before confirmation, i.e. a very short tap that was
-    // above threshold for a single frame. Don't lose it: press at that
-    // frame's point now; the release debounce below turns it into a normal
-    // press/release pair for LVGL a moment later. Only for a FIRM single
-    // frame (pend_z >= TOUCH_Z_SHORT_TAP): a light one-frame blip is noise
-    // and would be a ghost touch.
-    flt_x = (float)pend_x;
-    flt_y = (float)pend_y;
-    last_x = pend_x;
-    last_y = pend_y;
-    press_x = pend_x;
-    press_y = pend_y;
-    peak_dh = peak_dv = peak_flt = max_step = 0;
-    swipe_armed = false;         // too short to be a gesture anyway
-    confirm_left = -1;
-    last_ok_ms = millis();
-    pressed = true;
-    dispatched = true;
-    gesture_mode = false;
   }
   else if (pressed && (millis() - last_ok_ms) < TOUCH_RELEASE_DEBOUNCE_MS) {
     // Momentary pressure dip mid-drag: hold the last position. A tap that

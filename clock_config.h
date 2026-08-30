@@ -298,12 +298,6 @@ static const theme_t THEMES[] = {
 //   펜·손가락 드래그가 끊기면            -> TOUCH_Z_RELEASE를 내림(40)
 #define TOUCH_Z_PRESS      100
 #define TOUCH_Z_RELEASE    50
-
-// 접촉이 단 1프레임(10ms)만 있다가 끝난 아주 짧은 탭을 클릭으로 인정하기 위한 최소
-// 압력. 진짜로 빠르게 두드린 탭은 짧아도 압력이 확실히 오르지만, 노이즈는 낮은
-// 압력으로 한 프레임 스치므로 이 문턱이 고스트 터치를 막음. 2프레임 이상 이어지는
-// 접촉은 TOUCH_Z_PRESS/RELEASE로 정상 인식됨. 고스트 터치가 남으면 올림(150).
-#define TOUCH_Z_SHORT_TAP  150
 #if TOUCH_Z_RELEASE > TOUCH_Z_PRESS
 #error "TOUCH_Z_RELEASE must not exceed TOUCH_Z_PRESS (hysteresis would be inverted)"
 #endif
