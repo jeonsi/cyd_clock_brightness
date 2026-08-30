@@ -163,11 +163,13 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // sees a stream of press/release pairs instead of one continuous drag.
 #define TOUCH_RELEASE_DEBOUNCE_MS 60
 
-// Swipe (face switch) recognition. LVGL's defaults (50 px travel, velocity 3)
-// are tuned for capacitive panels and feel sluggish on this resistive one.
-// A tap only moves a few px, so these can go quite low before false swipes.
-#define TOUCH_GESTURE_MIN_DIST 20   // px of travel to count as a swipe
-#define TOUCH_GESTURE_MIN_VEL  1    // px per indev period
+// Swipe (face switch) recognition. LVGL's own gesture detector requires a
+// minimum *instantaneous velocity* at release, which pressure wobble on a
+// resistive panel rarely satisfies - swipes kept landing as taps. Instead,
+// a swipe is judged purely on displacement between press and release:
+// at least this many screen px of horizontal travel, and more horizontal
+// than vertical by 2:1. A tap only wanders a few px, so no false swipes.
+#define TOUCH_SWIPE_MIN_PX 30
 
 // Set to 1 to print raw + mapped touch coordinates on the serial monitor.
 // Note the mapped values are in the unrotated 240x320 space, so they will not
@@ -374,13 +376,25 @@ static void face_apply(void) {
   }
 }
 
-// Swipe left/right anywhere on the clock switches the face. The brightness
-// panel lives on the top layer, so its slider drags never bubble here.
-static void screen_gesture_cb(lv_event_t * e) {
+// Swipe left/right anywhere on the clock switches the face. Displacement
+// between press and release decides it - no velocity requirement, which a
+// resistive panel's wobbly release would fail. The brightness panel lives
+// on the top layer, so its slider drags never reach these handlers.
+static lv_point_t swipe_start;
+
+static void screen_pressed_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
-  if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
-    last_gesture_ms = millis();
+  lv_indev_get_point(lv_indev_active(), &swipe_start);
+}
+
+static void screen_released_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  lv_point_t p;
+  lv_indev_get_point(lv_indev_active(), &p);
+  int32_t dx = p.x - swipe_start.x;
+  int32_t dy = p.y - swipe_start.y;
+  if (LV_ABS(dx) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dx) > 2 * LV_ABS(dy)) {
+    last_gesture_ms = millis();   // swallow the CLICKED that follows
     face_mode = !face_mode;
     face_apply();
     prefs.putInt("face", face_mode);
@@ -389,7 +403,7 @@ static void screen_gesture_cb(lv_event_t * e) {
 
 // A tap anywhere on the clock face opens the panel. CLICKED also fires at
 // the end of a swipe (the screen is not scrollable, so moving does not
-// suppress it) - the gesture timestamp filters those out.
+// suppress it) - RELEASED runs first and its timestamp filters those out.
 static void screen_click_cb(lv_event_t * e) {
   LV_UNUSED(e);
   if (millis() - last_gesture_ms < 600) return;
@@ -792,8 +806,9 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(0xFF3300), 0);
+  lv_obj_add_event_cb(lv_screen_active(), screen_pressed_cb, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(lv_screen_active(), screen_released_cb, LV_EVENT_RELEASED, NULL);
   lv_obj_add_event_cb(lv_screen_active(), screen_click_cb, LV_EVENT_CLICKED, NULL);
-  lv_obj_add_event_cb(lv_screen_active(), screen_gesture_cb, LV_EVENT_GESTURE, NULL);
 
   // Everything of the digital face hangs off this container so one flag
   // flip swaps the whole face.
@@ -1093,8 +1108,6 @@ void setup() {
   lv_indev_t * indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touchscreen_read);
-  lv_indev_set_gesture_min_distance(indev, TOUCH_GESTURE_MIN_DIST);
-  lv_indev_set_gesture_min_velocity(indev, TOUCH_GESTURE_MIN_VEL);
 
   // Boot status screen, replaced by the clock once time is known
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);

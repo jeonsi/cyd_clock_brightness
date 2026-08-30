@@ -140,8 +140,7 @@ Arduino IDE 기준:
 | `LDR_RAW_BRIGHT/DARK` | 300/3600 | 조도 센서 ADC 보정값. `LDR_DEBUG 1`로 raw 값을 찍어 조정 (센서를 가리면 어두움, 조명을 비추면 밝음 값) |
 | `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
-| `TOUCH_GESTURE_MIN_DIST` | 20 | 스와이프로 인식할 최소 이동 거리(px). LVGL 기본 50은 저항막에서 둔함 |
-| `TOUCH_GESTURE_MIN_VEL` | 1 | 스와이프 최소 속도. 높이면 천천히 끄는 동작은 무시됨 |
+| `TOUCH_SWIPE_MIN_PX` | 30 | 스와이프로 인식할 최소 가로 이동 거리(px). 속도 무관, 누른 지점→뗀 지점 변위로만 판정 |
 | `TOUCH_RAW_MIN/MAX_X/Y` | 실측값 | 터치 캘리브레이션. 패널마다 다르므로 `TOUCH_DEBUG 1`로 raw 값을 찍어 조정 |
 | `TOUCH_DEBUG` | 0 | 1로 켜면 시리얼로 터치 좌표 출력 |
 
