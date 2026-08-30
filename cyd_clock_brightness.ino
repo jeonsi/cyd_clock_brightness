@@ -19,6 +19,8 @@
         sets the ceiling, darkness dims toward BL_AUTO_MIN_PCT of it
       - analog face (lv_scale dial + line needles) with a compact info
         column; swipe left/right to switch faces, choice kept in NVS
+      - background color selectable from swatches on the brightness panel
+        (white / ivory / dark gray / black, THEMES table, kept in NVS)
       - every field has a fixed width so nothing shifts when the digits change
       - touch the screen to bring up a backlight brightness slider
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
@@ -294,9 +296,27 @@ static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "�
 #define ANALOG_HOUR_LEN   48
 #define ANALOG_MIN_LEN    68
 #define ANALOG_SEC_LEN    78
-#define NEEDLE_HM_COLOR   lv_color_hex(0x333333)
-#define DIAL_MAJOR_COLOR  lv_color_hex(0x444444)
-#define DIAL_MINOR_COLOR  lv_color_hex(0xBBBBBB)
+
+// ======================= Background themes ================================
+// A row of swatches on the brightness panel picks the background color; the
+// choice is stored in NVS. Ink that must adapt to stay readable (dial ticks
+// and numerals, hour/minute needles, boot text) is part of each theme; the
+// orange segments and the green/red calendar colors read fine on all of
+// them. Note SHOW_GHOST_SEGMENTS' GHOST_COLOR is tuned for light themes.
+typedef struct {
+  uint32_t bg;
+  uint32_t dial_major;   // major ticks, hour numerals, boot text
+  uint32_t dial_minor;   // minute ticks
+  uint32_t needle_hm;    // hour and minute needles
+} theme_t;
+
+static const theme_t THEMES[] = {
+  { 0xFFFFFF, 0x444444, 0xBBBBBB, 0x333333 },  // white (default)
+  { 0xFFF3DC, 0x444444, 0xBBBBBB, 0x333333 },  // warm ivory
+  { 0x202020, 0xCCCCCC, 0x666666, 0xDDDDDD },  // dark gray
+  { 0x000000, 0xCCCCCC, 0x666666, 0xDDDDDD },  // black
+};
+#define THEME_COUNT ((int)(sizeof(THEMES) / sizeof(THEMES[0])))
 
 static lv_obj_t * label_ampm;
 static lv_obj_t * label_hm;
@@ -325,6 +345,8 @@ static lv_obj_t * label_a_event;
 
 static int      face_mode = 0;        // 0 = digital, 1 = analog (kept in NVS)
 static uint32_t last_gesture_ms = 0;
+static int      theme_idx = 0;        // index into THEMES (kept in NVS)
+static lv_obj_t * theme_btns[THEME_COUNT];
 
 enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
 static boot_state_t boot_state = BOOT_WIFI;
@@ -452,6 +474,20 @@ static void bl_slider_cb(lv_event_t * e) {
   LV_UNUSED(e);
   bl_set_pct(lv_slider_get_value(bl_slider));
   bl_last_touch_ms = millis();
+}
+
+// Repaint everything whose color belongs to the theme. Safe to call before
+// the analog face exists (during boot only the background matters).
+static void theme_apply(void) {
+  const theme_t * th = &THEMES[theme_idx];
+  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(th->bg), 0);
+  if (a_scale) {
+    lv_obj_set_style_line_color(a_scale, lv_color_hex(th->dial_minor), LV_PART_ITEMS);
+    lv_obj_set_style_line_color(a_scale, lv_color_hex(th->dial_major), LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(a_scale, lv_color_hex(th->dial_major), LV_PART_INDICATOR);
+    lv_obj_set_style_line_color(a_needle_h, lv_color_hex(th->needle_hm), 0);
+    lv_obj_set_style_line_color(a_needle_m, lv_color_hex(th->needle_hm), 0);
+  }
 }
 
 static void face_apply(void) {
@@ -748,11 +784,28 @@ static void timer_cb(lv_timer_t * timer) {
   }
 }
 
+// ---- Theme swatches on the brightness panel -------------------------------
+static void theme_btn_refresh(void) {
+  for (int i = 0; i < THEME_COUNT; i++) {
+    lv_obj_set_style_border_color(theme_btns[i],
+        i == theme_idx ? lv_color_hex(0xFF3300) : lv_color_hex(0x777777), 0);
+    lv_obj_set_style_border_width(theme_btns[i], i == theme_idx ? 2 : 1, 0);
+  }
+}
+
+static void theme_btn_cb(lv_event_t * e) {
+  theme_idx = (int)(intptr_t)lv_event_get_user_data(e);
+  theme_apply();
+  theme_btn_refresh();
+  prefs.putInt("theme", theme_idx);
+  bl_last_touch_ms = millis();
+}
+
 // Floating brightness control, parented to the top layer so it draws over
 // the clock without disturbing its layout.
 static void create_brightness_panel(void) {
   bl_panel = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(bl_panel, 300, 62);
+  lv_obj_set_size(bl_panel, 300, 74);
   lv_obj_align(bl_panel, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_obj_remove_flag(bl_panel, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(bl_panel, lv_color_hex(0x181818), 0);
@@ -768,7 +821,22 @@ static void create_brightness_panel(void) {
   bl_pct_label = lv_label_create(bl_panel);
   lv_obj_set_style_text_font(bl_pct_label, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(bl_pct_label, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(bl_pct_label, LV_ALIGN_TOP_MID, 0, -4);
+  lv_obj_align(bl_pct_label, LV_ALIGN_TOP_LEFT, 0, -2);
+
+  // Background color swatches, top-right; the current one gets an orange ring
+  for (int i = 0; i < THEME_COUNT; i++) {
+    lv_obj_t * b = lv_obj_create(bl_panel);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, 24, 24);
+    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -(THEME_COUNT - 1 - i) * 32, -2);
+    lv_obj_set_style_radius(b, 6, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(THEMES[i].bg), 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_ext_click_area(b, 6);
+    lv_obj_add_event_cb(b, theme_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    theme_btns[i] = b;
+  }
+  theme_btn_refresh();
 
   bl_slider = lv_slider_create(bl_panel);
   lv_slider_set_range(bl_slider, BL_MIN_PCT, 100);
@@ -810,25 +878,22 @@ static void create_analog_face(void) {
   lv_scale_set_text_src(a_scale, hour_txts);
   lv_scale_set_label_show(a_scale, true);
 
+  // Tick/numeral/needle colors are theme-dependent and applied by
+  // theme_apply() at the end of this function.
   lv_obj_set_style_arc_width(a_scale, 0, LV_PART_MAIN);
   lv_obj_set_style_line_width(a_scale, 1, LV_PART_ITEMS);
   lv_obj_set_style_length(a_scale, 5, LV_PART_ITEMS);
-  lv_obj_set_style_line_color(a_scale, DIAL_MINOR_COLOR, LV_PART_ITEMS);
   lv_obj_set_style_line_width(a_scale, 3, LV_PART_INDICATOR);
   lv_obj_set_style_length(a_scale, 9, LV_PART_INDICATOR);
-  lv_obj_set_style_line_color(a_scale, DIAL_MAJOR_COLOR, LV_PART_INDICATOR);
   lv_obj_set_style_text_font(a_scale, &lv_font_montserrat_20, LV_PART_INDICATOR);
-  lv_obj_set_style_text_color(a_scale, DIAL_MAJOR_COLOR, LV_PART_INDICATOR);
 
   // ---- Needles (children of the scale; lv_scale positions the points)
   a_needle_h = lv_line_create(a_scale);
   lv_obj_set_style_line_width(a_needle_h, 5, 0);
-  lv_obj_set_style_line_color(a_needle_h, NEEDLE_HM_COLOR, 0);
   lv_obj_set_style_line_rounded(a_needle_h, true, 0);
 
   a_needle_m = lv_line_create(a_scale);
   lv_obj_set_style_line_width(a_needle_m, 3, 0);
-  lv_obj_set_style_line_color(a_needle_m, NEEDLE_HM_COLOR, 0);
   lv_obj_set_style_line_rounded(a_needle_m, true, 0);
 
   a_needle_s = lv_line_create(a_scale);
@@ -906,12 +971,14 @@ static void create_analog_face(void) {
   lv_obj_set_width(label_a_event, 116);          // long names wrap
   lv_obj_set_style_text_align(label_a_event, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
+
+  theme_apply();   // paint the dial and needles for the restored theme
 }
 
 void lv_create_main_gui(void) {
 
-  // 흰 배경 + 주황 세그먼트
-  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
+  // 테마 배경 + 주황 세그먼트
+  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(THEMES[theme_idx].bg), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(0xFF3300), 0);
   lv_obj_add_event_cb(lv_screen_active(), screen_click_cb, LV_EVENT_CLICKED, NULL);
@@ -1186,6 +1253,8 @@ void setup() {
   bl_pct = prefs.getInt("bl", BL_DEFAULT);
   bl_saved_pct = bl_pct;
   face_mode = prefs.getInt("face", 0);
+  theme_idx = prefs.getInt("theme", 0);
+  if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
 
   // Touch controller on its own SPI bus, driven directly (see xpt_frame)
   touchscreenSPI.begin(XPT2046_CLK, XPT2046_MISO, XPT2046_MOSI, XPT2046_CS);
@@ -1215,12 +1284,13 @@ void setup() {
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touchscreen_read);
 
-  // Boot status screen, replaced by the clock once time is known
-  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_white(), 0);
+  // Boot status screen, replaced by the clock once time is known.
+  // Uses the restored theme so a dark clock does not boot blinding white.
+  lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(THEMES[theme_idx].bg), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   boot_label = lv_label_create(lv_screen_active());
   lv_obj_set_style_text_font(boot_label, &lv_font_montserrat_20, 0);
-  lv_obj_set_style_text_color(boot_label, lv_color_hex(0x555555), 0);
+  lv_obj_set_style_text_color(boot_label, lv_color_hex(THEMES[theme_idx].dial_major), 0);
   lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
   lv_obj_center(boot_label);
 
