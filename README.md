@@ -113,7 +113,7 @@ Arduino IDE 기준:
 | `font_dseg_30` | 초 (Italic 30px, `0-9`) |
 | `font_dseg_26` | 날짜 (Italic 26px, `0-9-`) |
 | `font_dseg14_ampm_20` | AM/PM (DSEG14 Classic Italic 20px, `AMP` — 숫자와 같은 기울기의 14세그먼트 알파벳) |
-| `font_kr_26` | 한글 요일 (나눔고딕 26px, `일월화수목금토` 만 포함) |
+| `font_kr_26` | 한글 요일 (나눔고딕 26px, `( ) 년월일화수목금토` 와 공백만 포함 — 날짜 줄의 `(일)`, 달력 요일 머리글, 알람 요일 버튼에 사용) |
 
 음력/절기 줄과 스톱워치 랩 줄에는 별도의 `lunar_font.h`에 담긴 세 폰트가 사용됩니다:
 
