@@ -343,7 +343,8 @@ static Preferences prefs;
 static int      bl_pct = BL_DEFAULT;
 static int      bl_saved_pct = -1;
 static uint32_t bl_last_touch_ms = 0;
-static int      bl_auto_factor = 100;   // % of bl_pct, driven by the LDR
+static int      bl_auto_factor = 100;   // % of bl_pct, driven by the LDR (100 while the panel is open)
+static int      bl_ldr_target  = 100;   // what the LDR alone would set the factor to, for the label
 static float    ldr_ema = -1.0f;
 static bool     screen_off = false;     // backlight fully off after SCREEN_OFF_MS idle
 static bool     screen_auto = true;     // false = always on (panel toggle, kept in NVS "soff")
@@ -405,6 +406,22 @@ static void screen_wake(void) {
   bl_apply();
 }
 
+// Panel label: the slider setting, and with AUTO_BL the brightness the LDR
+// is actually applying right now ("80% > 34%"). While the panel is open the
+// scaling itself is suspended, but the LDR target keeps being computed so
+// the second number stays live.
+static void bl_label_refresh(void) {
+  char buf[24];
+#if AUTO_BL
+  int eff = bl_pct * bl_ldr_target / 100;
+  if (eff < BL_MIN_PCT) eff = BL_MIN_PCT;
+  snprintf(buf, sizeof(buf), "%d%% " LV_SYMBOL_RIGHT " %d%%", bl_pct, eff);
+#else
+  snprintf(buf, sizeof(buf), "%d%%", bl_pct);
+#endif
+  lv_label_set_text(bl_pct_label, buf);
+}
+
 #if AUTO_BL
 // Called from timer_cb, i.e. every 200 ms. EMA smoothing keeps the panel
 // from pumping when a hand or shadow passes over the sensor.
@@ -420,19 +437,22 @@ static void auto_bl_update(void) {
   }
 #endif
 
-  int target;
-  if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN)) {
-    target = 100;   // full range while the user is adjusting
-  } else {
-    float x = ((float)LDR_RAW_DARK - ldr_ema)
-            / ((float)LDR_RAW_DARK - (float)LDR_RAW_BRIGHT);  // 1 bright .. 0 dark
-    if (x < 0.0f) x = 0.0f;
-    if (x > 1.0f) x = 1.0f;
-    target = BL_AUTO_MIN_PCT + (int)(x * (100 - BL_AUTO_MIN_PCT) + 0.5f);
+  float x = ((float)LDR_RAW_DARK - ldr_ema)
+          / ((float)LDR_RAW_DARK - (float)LDR_RAW_BRIGHT);  // 1 bright .. 0 dark
+  if (x < 0.0f) x = 0.0f;
+  if (x > 1.0f) x = 1.0f;
+  int ldr_target = BL_AUTO_MIN_PCT + (int)(x * (100 - BL_AUTO_MIN_PCT) + 0.5f);
+
+  bool panel_open = bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
+  // 2% deadband so tiny ADC noise does not cause continuous PWM rewrites
+  // (or label repaints)
+  if (ldr_target - bl_ldr_target >= 2 || bl_ldr_target - ldr_target >= 2) {
+    bl_ldr_target = ldr_target;
+    if (panel_open) bl_label_refresh();
   }
 
-  // 2% deadband so tiny ADC noise does not cause continuous PWM rewrites
-  if (target - bl_auto_factor >= 2 || bl_auto_factor - target >= 2) {
+  int target = panel_open ? 100 : bl_ldr_target;   // full range while adjusting
+  if (target != bl_auto_factor) {
     bl_auto_factor = target;
     bl_apply();
   }
@@ -461,9 +481,7 @@ static void bl_store(void) {
 static void bl_set_pct(int pct) {
   bl_pct = pct;
   bl_apply();
-  char buf[8];
-  snprintf(buf, sizeof(buf), "%d%%", bl_pct);
-  lv_label_set_text(bl_pct_label, buf);
+  bl_label_refresh();
 }
 
 static void bl_panel_show(void) {
