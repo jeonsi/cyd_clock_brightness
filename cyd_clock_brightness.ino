@@ -853,6 +853,7 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static int32_t  raw_last_x = 0, raw_last_y = 0;   // unfiltered, for swipes
   static int32_t  peak_dh = 0, peak_dv = 0;         // largest RAW travel this press (swipes)
   static int32_t  peak_flt = 0;                     // largest FILTERED travel (tap test)
+  static int      confirm_left = -1;                // press-confirmation frames still to skip
   static bool     swipe_armed = false;
   static float    flt_x = 0, flt_y = 0;
 
@@ -881,6 +882,22 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     if (x >= SCREEN_WIDTH)  x = SCREEN_WIDTH  - 1;
     if (y < 0) y = 0;
     if (y >= SCREEN_HEIGHT) y = SCREEN_HEIGHT - 1;
+
+    // Press confirmation: the first contact frame(s) come from the
+    // low-pressure onset and their coordinates often spike onto a
+    // neighbouring button, so they are skipped and the press point is taken
+    // from the first stable frame after them. LVGL still sees "released"
+    // meanwhile; a contact that vanishes before confirming was just a blip.
+    if (!pressed) {
+      if (confirm_left < 0) confirm_left = TOUCH_PRESS_CONFIRM_FRAMES;
+      if (confirm_left > 0) {
+        confirm_left--;
+        data->point.x = last_x;
+        data->point.y = last_y;
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+      }
+    }
 
     raw_last_x = x;
     raw_last_y = y;
@@ -973,6 +990,7 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       }
     }
     pressed = false;
+    confirm_left = -1;   // next contact starts a fresh confirmation
   }
 
   data->point.x = last_x;
