@@ -33,11 +33,13 @@
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
 
     REQUIRED FILES in the same folder as this .ino:
-      clock_fonts.h     - DSEG7 68/30/26 px + NanumGothic 26 px
+      clock_fonts.h     - DSEG7 68/30/26 px + DSEG14 20 px + NanumGothic 26 px
                           AND font_dseg_bold_68 (see below)
       lunar_font.h      - NanumGothic 22 px subset + DSEG 26 px with '.'
       korean_calendar.h - lunar calendar, solar terms, holiday tables
       secrets.h         - Wi-Fi credentials (copy secrets.h.example)
+      clock_config.h    - all tunables (timezone, colors, themes, touch
+                          calibration, sounds, ...) with per-item notes
 
     The bold face is a new addition. Generate it with:
 
@@ -70,6 +72,7 @@
 #include "clock_fonts.h"
 #include "lunar_font.h"
 #include "korean_calendar.h"
+#include "clock_config.h"   // every tunable, with notes on what each does
 
 // Wi-Fi credentials live in secrets.h (gitignored).
 // Copy secrets.h.example to secrets.h and fill in your own.
@@ -77,38 +80,12 @@
 const char* ssid = WIFI_SSID;
 const char* password = WIFI_PASSWORD;
 
-// POSIX TZ string. "KST-9" = UTC+9, no DST (Seoul).
-#define TZ_INFO "KST-9"
-
-// How often SNTP re-syncs the system clock (milliseconds)
-#define NTP_SYNC_INTERVAL_MS (30 * 60 * 1000)
-
 // Panel size in its native, unrotated orientation
 #define SCREEN_WIDTH  240
 #define SCREEN_HEIGHT 320
 
 #define DRAW_BUF_SIZE (SCREEN_WIDTH * SCREEN_HEIGHT / 10 * (LV_COLOR_DEPTH / 8))
 uint32_t draw_buf[DRAW_BUF_SIZE / 4];
-
-// HH:MM uses the Bold weight; the smaller fields stay Regular so the time
-// stands out. Swap in font_dseg_68 here for the thinner Regular weight.
-#define FONT_TIME     &font_dseg_bold_68   // HH:MM
-#define FONT_SEC      &font_dseg_30        // seconds
-#define FONT_DATENUM  &font_dseg_26        // date digits
-#define FONT_KR       &font_kr_26          // weekday
-#define FONT_AMPM     &lv_font_montserrat_20   // must be enabled in lv_conf.h
-#define FONT_LUNAR         &font_kr_lunar_22     // "음"/"윤" prefix + solar term
-#define FONT_LUNAR_NUM     &font_dseg_lunar_26   // lunar date digits, DSEG like the solar date
-#define FONT_LUNAR_NUM_SM  &font_dseg_lunar_20   // smaller variant for the analog info column
-
-// Same orange as the solar date digits. Point this at a gray (e.g. 0x777777)
-// to demote the line to secondary information.
-#define LUNAR_COLOR   lv_color_hex(0xFF3300)
-
-#define SHOW_GHOST_SEGMENTS 0
-#define GHOST_COLOR lv_color_hex(0xDDDDDD)
-
-#define WEEKDAY_BASELINE_NUDGE 4
 
 // ======================= Backlight (PWM) =================================
 // TFT_eSPI's User_Setup for the CYD defines TFT_BL (GPIO 21 on the
@@ -119,13 +96,8 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
   #define BL_PIN 21
 #endif
 
-#define BL_FREQ      5000   // 5 kHz - above audible range, no visible flicker
-#define BL_RES       10     // 10-bit duty (0..1023)
 #define BL_CHANNEL   0      // only used on ESP32 Arduino core 2.x
-#define BL_MIN_PCT   5      // never let the user turn the panel fully black
-#define BL_DEFAULT   80
-
-#define BL_PANEL_TIMEOUT_MS 4000   // auto-hide the slider after this idle time
+// BL_FREQ / BL_RES / BL_MIN_PCT / BL_DEFAULT / BL_PANEL_TIMEOUT_MS: clock_config.h
 
 // ======================= Ambient light (LDR) ==============================
 // The CYD has a photoresistor on GPIO 34 (input-only, ADC1). It scales the
@@ -133,18 +105,8 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 // decides how much of it is used, down to BL_AUTO_MIN_PCT in full darkness.
 // While the slider panel is open the scaling is suspended (factor 100%) so
 // the user sees the true range they are setting.
-#define AUTO_BL          1     // 0 disables ambient dimming entirely
 #define LDR_PIN          34
-// Raw ADC endpoints of the mapping, with 11 dB attenuation. Calibrate with
-// LDR_DEBUG 1: cover the sensor for the dark value, shine a lamp at it for
-// the bright one. Swapped endpoints (bright > dark) also work.
-#define LDR_RAW_BRIGHT   300
-#define LDR_RAW_DARK     3600
-#define BL_AUTO_MIN_PCT  15    // % of the user setting kept in full darkness
-#define LDR_DEBUG        0
-
-// ======================= Boot / connectivity ==============================
-#define WIFI_RETRY_MS   (30 * 1000)   // re-issue WiFi.begin() this often
+// AUTO_BL / LDR_RAW_* / BL_AUTO_MIN_PCT / LDR_DEBUG: clock_config.h
 
 // ======================= Touch (XPT2046) =================================
 // The CYD wires the touch controller to its own SPI bus, separate from the
@@ -158,69 +120,21 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define XPT2046_CLK  25
 #define XPT2046_CS   33
 
-// Measured on this panel with TOUCH_DEBUG and a stylus at the four screen
-// corners, using the raw driver below (the old library's interleaved
-// sampling read a noticeably different range - recalibrate after any
-// change to the sampling scheme):
-//   top    rx ~326/303   bottom rx ~3836/3837
-//   left   ry ~3717/3719 right  ry ~170/138
-#define TOUCH_RAW_MIN_X 315
-#define TOUCH_RAW_MAX_X 3837
-#define TOUCH_RAW_MIN_Y 154
-#define TOUCH_RAW_MAX_Y 3718
-
-// IMPORTANT: LVGL 9 rotates pointer coordinates itself, inside
-// indev_pointer_proc(), to match the display rotation. The read callback must
-// therefore report coordinates in the panel's NATIVE 240x320 space and must
-// not apply any rotation of its own. There is deliberately no swap-axes flag
-// here; only these two direction flags remain.
-#define TOUCH_INVERT_X 1
-#define TOUCH_INVERT_Y 1
-
-// Constant offset correction, in native px, applied after the inversion
-// above. With the corner-measured TOUCH_RAW_* calibration these stay 0;
-// they remain as a quick fix for small drift. Native X maps to the
-// SCREEN-VERTICAL axis under the 270-degree rotation: if the pointer
-// registers BELOW where you actually touch, make TOUCH_TRIM_X more
-// positive; TOUCH_TRIM_Y is the same idea for the screen-horizontal axis.
-#define TOUCH_TRIM_X 0
-#define TOUCH_TRIM_Y 0
-
-// Momentary contact loss during a drag is common on a resistive panel. Hold
-// the last position for this long before reporting a release, otherwise LVGL
-// sees a stream of press/release pairs instead of one continuous drag.
-#define TOUCH_RELEASE_DEBOUNCE_MS 60
-
-// Pressure (Z) hysteresis: a touch starts only above TOUCH_Z_PRESS, but
-// stays alive down to TOUCH_Z_RELEASE. A finger easily exceeds the press
-// level; a stylus hovers around it, and without the low hold level its
-// drags kept breaking up. Raise TOUCH_Z_PRESS if resting dust or a palm
-// triggers phantom touches.
-#define TOUCH_Z_PRESS      300
-#define TOUCH_Z_RELEASE    100
-
-// Per-frame noise handling: TOUCH_SAMPLES reads per axis, sorted, middle
-// half averaged (kills outlier spikes), then an EMA across frames.
-// Lower alpha = smoother but laggier cursor.
-#define TOUCH_SAMPLES      8
-#define TOUCH_FILTER_ALPHA 0.4f
-
-// Swipe recognition, done directly in touchscreen_read() so it works no
-// matter which widget sits under the finger (LVGL press events stop at
-// clickable widgets like the analog dial and don't bubble to the screen).
-// LVGL's own gesture detector is not used either: it requires a minimum
-// *instantaneous velocity* at release, which pressure wobble on a resistive
-// panel rarely satisfies. A swipe is pure displacement between press and
-// release, measured on the UNFILTERED coordinates (the EMA lags a fast
-// flick and would understate it): any travel of at least this many px is a
-// gesture - the larger axis decides horizontal (face switch) vs vertical
-// (calendar month) - and only sub-threshold presses count as taps.
-#define TOUCH_SWIPE_MIN_PX 30
-
-// Set to 1 to print raw + mapped touch coordinates on the serial monitor.
-// Note the mapped values are in the unrotated 240x320 space, so they will not
-// line up visually with where you pressed on the rotated screen.
-#define TOUCH_DEBUG 0
+// Calibration (TOUCH_RAW_*), axis flags, trims, debounce, pressure
+// thresholds, filtering, swipe threshold and TOUCH_DEBUG: clock_config.h.
+//
+// Coordinate contract: LVGL 9 rotates pointer coordinates itself, inside
+// indev_pointer_proc(), to match the display rotation, so the read callback
+// reports coordinates in the panel's NATIVE 240x320 space and never swaps
+// axes - only the two TOUCH_INVERT_* direction flags apply.
+//
+// Swipes are detected in touchscreen_read() rather than via LVGL gestures:
+// press events stop at clickable widgets (the analog dial) and don't bubble
+// to the screen, and LVGL's gesture detector needs an instantaneous release
+// velocity that pressure wobble on a resistive panel rarely provides. A
+// swipe is pure displacement between press and release on the UNFILTERED
+// coordinates; anything past TOUCH_SWIPE_MIN_PX is a gesture (larger axis
+// decides face switch vs calendar month), less is a tap.
 
 SPIClass touchscreenSPI = SPIClass(VSPI);
 
@@ -288,25 +202,6 @@ static int xpt_frame(int32_t * rx, int32_t * ry) {
 // tm_wday: 0 = Sunday
 static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "금", "토"};
 
-// ======================= Calendar colors ==================================
-// The holiday date table itself lives in korean_calendar.h (kr_holiday_name,
-// kr_is_red_day, kr_lunar_festival).
-#define WEEKDAY_COLOR_NORMAL  lv_color_hex(0x33CC66)
-#define WEEKDAY_COLOR_HOLIDAY lv_color_hex(0xE60000)
-
-#define EVENT_HOLIDAY_COLOR   WEEKDAY_COLOR_HOLIDAY   // 설날, 추석, ...
-#define EVENT_FESTIVAL_COLOR  lv_color_hex(0x33CC66)  // 정월대보름, 단오, 칠석
-#define TERM_TODAY_COLOR      lv_color_hex(0x33CC66)  // 절기 당일 강조
-
-// ======================= Analog face ======================================
-// Swipe left/right anywhere on the clock to switch between the digital and
-// analog faces; the choice is stored in NVS. A tap still opens the
-// brightness slider.
-#define ANALOG_DIAL_SIZE  188
-#define ANALOG_HOUR_LEN   48
-#define ANALOG_MIN_LEN    68
-#define ANALOG_SEC_LEN    78
-
 // ======================= Depth / 3-D look ================================
 // Every face uses the same lighting: light from the top, shadows falling
 // to the bottom-right. Raised elements (the analog bezel, the card behind
@@ -315,56 +210,9 @@ static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "�
 // digital HH:MM get offset shadow copies for extra relief. Radial
 // gradients are not enabled in this LVGL build, so it is all linear +
 // shadow. Card and bezel tones derive from the theme background in
-// theme_apply(), so the relief looks like raised panel material on every
-// theme.
-#define DEPTH_SHADOW_W        22   // drop shadow blur for large plates
-#define DEPTH_SHADOW_OFS_X    4
-#define DEPTH_SHADOW_OFS_Y    8
-#define DEPTH_SHADOW_OPA      LV_OPA_50
-#define CARD_RADIUS           16
-#define ANALOG_BEZEL_W        7    // ring width beyond the dial radius
-#define NEEDLE_SHADOW_OFS_X   3    // also used for the HH:MM emboss
-#define NEEDLE_SHADOW_OFS_Y   4
-#define NEEDLE_SHADOW_OPA     LV_OPA_40
-#define MAX_CARDS             4
-
-// ======================= Background themes ================================
-// A row of swatches on the brightness panel picks the background color; the
-// choice is stored in NVS. Ink that must adapt to stay readable (dial ticks
-// and numerals, hour/minute needles, boot text) is part of each theme; the
-// orange segments and the green/red calendar colors read fine on all of
-// them. Note SHOW_GHOST_SEGMENTS' GHOST_COLOR is tuned for light themes.
-typedef struct {
-  uint32_t bg;
-  uint32_t dial_major;   // major ticks, hour numerals, boot text
-  uint32_t dial_minor;   // minute ticks
-  uint32_t needle_hm;    // hour and minute needles
-} theme_t;
-
-// Spread across lightness AND hue - a light row and a dark row of eight
-// each, matching the two swatch rows on the panel. The dial ink follows
-// each background's tone; the orange segments read well on all of them.
-static const theme_t THEMES[] = {
-  // lighter row
-  { 0xFFFFFF, 0x444444, 0xBBBBBB, 0x333333 },  // white (default)
-  { 0xFFF3DC, 0x444444, 0xBBBBBB, 0x333333 },  // warm ivory
-  { 0xF3DADE, 0x59383F, 0xB08A92, 0x4A2E34 },  // rose
-  { 0xCFC9E8, 0x3F3A5C, 0x8F89B5, 0x353052 },  // lavender
-  { 0xAEC6DE, 0x2F4358, 0x7E96AC, 0x263A4E },  // mist blue
-  { 0xA9B8A0, 0x394733, 0x7C8B74, 0x2F3D2A },  // sage
-  { 0xCEC09F, 0x4A4230, 0x968B68, 0x3E3728 },  // sand
-  { 0x9A9A9A, 0x333333, 0x6E6E6E, 0x2A2A2A },  // mid gray
-  // darker row
-  { 0x3D5A80, 0xD5E2F0, 0x6C87A6, 0xE2ECF7 },  // slate blue
-  { 0x2A6B66, 0xD2E8E5, 0x5E938E, 0xE0F0EE },  // teal
-  { 0x55603A, 0xDDE3C8, 0x8C9668, 0xE9EED8 },  // olive
-  { 0x4A3B5E, 0xE0D5EC, 0x7D6C96, 0xEBE2F4 },  // plum
-  { 0x5A2A3A, 0xEFD3DB, 0x99616F, 0xF6E1E7 },  // wine
-  { 0x453022, 0xE3D0BC, 0x8F7660, 0xEFDFCE },  // brown
-  { 0x16233D, 0xCBD6E8, 0x56657F, 0xDAE3F1 },  // navy
-  { 0x000000, 0xCCCCCC, 0x666666, 0xDDDDDD },  // black
-};
-#define THEME_COUNT ((int)(sizeof(THEMES) / sizeof(THEMES[0])))
+// theme_apply(). Shadow sizes, colors, analog geometry and the THEMES
+// table are in clock_config.h.
+#define MAX_CARDS             4    // plates registered for theme recoloring
 
 static lv_obj_t * label_ampm;
 static lv_obj_t * label_hm;
@@ -393,45 +241,16 @@ static lv_obj_t * label_lunar_term;  // current solar term
 #define FACE_CAL   2
 #define FACE_SW    3
 #define FACE_TM    4
-#define CAL_OFF_MAX 120   // browse limit, months away from today
 
 // ======================= Stopwatch / Timer ================================
 // Buttons use LVGL's built-in FontAwesome symbols (play/pause/refresh), so
 // no extra font glyphs are needed. The countdown timer beeps and flashes an
-// overlay until tapped or TIMER_ALARM_MS passes.
-//
-// Where the beeper lives:
-//   26 - the stock audio path: on-board 8002 amplifier feeding the SPEAK
-//        connector, for a dynamic speaker (4-8 ohm) or a piezo. GPIO 26 is
-//        not exposed anywhere else, so this only works if the amp does.
-//   27 - direct GPIO drive for a PASSIVE PIEZO buzzer wired between the
-//        CN1 connector's IO27 and GND pins (CN1: GND / IO22 / IO27 / 3V3).
-//        No amplifier involved; polarity does not matter. Use this when
-//        the amp is dead (symptom: only a few mV at SPEAK).
-#define SPK_PIN         26
+// overlay until tapped or TIMER_ALARM_MS passes. The hourly chime is a
+// Casio-style pip-pip played with blocking delays (~180 ms, once an hour)
+// because its 60 ms steps are finer than the UI tick.
+// SPK_PIN (26 = on-board amp / 27 = piezo on CN1), tones, alarm timeout,
+// BOOT_BEEP, SPK_TEST and the chime settings: clock_config.h.
 #define SPK_CHANNEL     2                        // ESP32 Arduino core 2.x only
-#define TIMER_ALARM_MS  (30 * 1000)
-#define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
-#define ALARM_TONE_HZ   2000
-#define BOOT_BEEP       1    // double beep at power-on to verify the speaker
-// Speaker diagnosis: plays 1 s tones at 500/1000/2000/3000 Hz right after
-// boot, before anything else. Turn on when chasing a silent speaker, and
-// probe the SPEAK pads with a multimeter in AC mode while it runs.
-#define SPK_TEST        0
-
-// ======================= Hourly chime =====================================
-// Casio-style "pip-pip" at the top of every hour: two short high beeps
-// with a short gap. Daytime only by default so a bedside clock stays quiet
-// at night - set the hours to 0 and 23 for an around-the-clock chime, or
-// HOURLY_CHIME to 0 to disable it. The pattern is played with blocking
-// delays (~180 ms total, once an hour) because its 60 ms steps are finer
-// than the UI tick.
-#define HOURLY_CHIME     1
-#define CHIME_TONE_HZ    2500
-#define CHIME_BEEP_MS    60
-#define CHIME_GAP_MS     60
-#define CHIME_FROM_HOUR  7    // first chiming hour (inclusive)
-#define CHIME_TO_HOUR    22   // last chiming hour (inclusive)
 static lv_obj_t * face_digital;
 static lv_obj_t * face_analog;
 static lv_obj_t * face_cal;
