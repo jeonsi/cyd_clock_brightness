@@ -3,7 +3,7 @@
 
     MODIFIED:
       - time kept by the ESP32 system clock, disciplined by SNTP
-      - seven-segment (DSEG) digits for the time, seconds and date
+      - slanted seven-segment (DSEG Italic) digits for the time, seconds and date
       - HH:MM drawn in the Bold weight, everything else Regular
       - larger time and seconds, small AM/PM, Korean weekday
       - the weekday turns red on Sundays and Korean public holidays
@@ -42,7 +42,7 @@
     The bold face is a new addition. Generate it with:
 
       npx lv_font_conv \
-        --font DSEG7Classic-Bold.ttf \
+        --font DSEG7Classic-BoldItalic.ttf \
         --size 68 --bpp 4 --format lvgl \
         --symbols "0123456789:" \
         --lv-include lvgl.h --no-compress \

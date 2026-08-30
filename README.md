@@ -12,7 +12,7 @@ NTP로 시간을 동기화하고, 7세그먼트(DSEG) 디지털 화면과 아날
         2026-08-23 (일)          ← 날짜(DSEG 26px) + 한글 요일(나눔고딕, 초록색)
 
                         AM
-        11:58           ──       ← HH:MM (DSEG Bold 68px, 12/24시간제 선택)
+        11:58           ──       ← HH:MM (DSEG Bold Italic 68px, 12/24시간제 선택)
                         42       ← 초 (DSEG 30px)
 
           음 7.11  입추          ← 음력 날짜 + 현재 절기 (숫자는 DSEG 26px, 한글은 나눔고딕 22px)
@@ -101,25 +101,26 @@ Arduino IDE 기준:
 
 | 폰트 | 용도 |
 |---|---|
-| `font_dseg_bold_68` | HH:MM (DSEG7 Classic Bold 68px, `0-9:`) |
-| `font_dseg_68` | (예비) DSEG7 Classic Regular 68px |
-| `font_dseg_30` | 초 (Regular 30px, `0-9`) |
-| `font_dseg_26` | 날짜 (Regular 26px, `0-9-`) |
+| `font_dseg_bold_68` | HH:MM (DSEG7 Classic **Bold Italic** 68px, `0-9:`) |
+| `font_dseg_68` | (예비) DSEG7 Classic Italic 68px |
+| `font_dseg_30` | 초 (Italic 30px, `0-9`) |
+| `font_dseg_26` | 날짜 (Italic 26px, `0-9-`) |
 | `font_kr_26` | 한글 요일 (나눔고딕 26px, `일월화수목금토` 만 포함) |
 
 음력/절기 줄에는 별도의 `lunar_font.h`에 담긴 두 폰트가 사용됩니다:
 
-- `font_dseg_lunar_26` — 음력 숫자용. 양력 날짜와 동일한 DSEG7 Classic Regular 26px에 점(`.`) 글리프를 추가한 것. 번들 폰트와 똑같이 숫자 7의 F세그먼트를 제거(fontTools로 TTF 윤곽선 수술)했고, DSEG 원본의 점은 advance가 0(LCD처럼 직전 숫자에 겹침)이라 날짜 구분자로 읽히도록 7.5px로 패치함
+- `font_dseg_lunar_26` — 음력 숫자용. 양력 날짜와 동일한 DSEG7 Classic Italic 26px에 점(`.`) 글리프를 추가한 것. 번들 폰트와 똑같이 숫자 7의 F세그먼트를 제거(fontTools로 TTF 윤곽선 수술)했고, DSEG 원본의 점은 advance가 0(LCD처럼 직전 숫자에 겹침)이라 날짜 구분자로 읽히도록 7.5px로 패치함
 - `font_kr_lunar_22` — "음"·"윤"·절기 명칭·명절/공휴일 이름용 나눔고딕 22px 서브셋
 
 특이사항:
 
-- DSEG의 기본 숫자 **7**은 A·B·C·F 세그먼트를 켜는데, 이 번들은 F를 제거해 A·B·C 세 개만 켜지도록 FontForge 소스에서 다시 래스터라이즈했습니다.
+- 모든 DSEG 폰트는 일반 디지털 시계처럼 오른쪽으로 기울어진 **Italic** 계열입니다.
+- DSEG의 기본 숫자 **7**은 A·B·C·F 세그먼트를 켜는데, 이 번들은 F를 제거해 A·B·C 세 개만 켜지도록 TTF에서 해당 윤곽선을 삭제(fontTools)한 뒤 변환했습니다.
 - 새 폰트를 추가하려면 `lv_font_conv`를 사용합니다. 예:
 
   ```bash
   npx lv_font_conv \
-    --font DSEG7Classic-Bold.ttf \
+    --font DSEG7Classic-BoldItalic.ttf \
     --size 68 --bpp 4 --format lvgl \
     --symbols "0123456789:" \
     --lv-include lvgl.h --no-compress \
