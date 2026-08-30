@@ -370,6 +370,7 @@ static lv_obj_t * label_lunar_term;  // current solar term
 #define TIMER_ALARM_MS  (30 * 1000)
 #define TIMER_MAX_MS    (99u * 60u * 1000u + 59000u)   // display cap 99:59
 #define ALARM_TONE_HZ   2000
+#define BOOT_BEEP       1    // double beep at power-on to verify the speaker
 static lv_obj_t * face_digital;
 static lv_obj_t * face_analog;
 static lv_obj_t * face_cal;
@@ -1712,6 +1713,16 @@ void setup() {
   ledcSetup(SPK_CHANNEL, ALARM_TONE_HZ, 10);
   ledcAttachPin(SPK_PIN, SPK_CHANNEL);
   ledcWriteTone(SPK_CHANNEL, 0);
+#endif
+
+#if BOOT_BEEP
+  // Short double beep so a freshly attached speaker can be verified
+  for (int i = 0; i < 2; i++) {
+    spk_tone(ALARM_TONE_HZ);
+    delay(120);
+    spk_tone(0);
+    delay(80);
+  }
 #endif
 
   lv_indev_t * indev = lv_indev_create();

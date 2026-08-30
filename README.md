@@ -149,6 +149,8 @@ Arduino IDE 기준:
 | `LDR_RAW_BRIGHT/DARK` | 300/3600 | 조도 센서 ADC 보정값. `LDR_DEBUG 1`로 raw 값을 찍어 조정 (센서를 가리면 어두움, 조명을 비추면 밝음 값) |
 | `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
+| `BOOT_BEEP` | 1 | 부팅 시 스피커 확인용 비프음 2회. 0으로 끔 |
+| `ALARM_TONE_HZ` | 2000 | 알람/비프 주파수. 스피커 음량이 작으면 1000~3000에서 조정 |
 | `ANALOG_DIAL_SIZE` | 188 | 아날로그 다이얼 지름(px) |
 | `ANALOG_HOUR/MIN/SEC_LEN` | 48/68/78 | 시침·분침·초침 길이(px, 중심 기준) |
 | `TOUCH_SWIPE_MIN_PX` | 30 | 스와이프로 인식할 최소 가로 이동 거리(px). 속도 무관, 누른 지점→뗀 지점 변위로만 판정 |
