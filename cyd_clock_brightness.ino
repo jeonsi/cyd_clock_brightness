@@ -199,14 +199,16 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define TOUCH_SAMPLES      8
 #define TOUCH_FILTER_ALPHA 0.4f
 
-// Swipe (face switch) recognition, done directly in touchscreen_read() so it
-// works no matter which widget sits under the finger (LVGL press events stop
-// at clickable widgets like the analog dial and don't bubble to the screen).
+// Swipe recognition, done directly in touchscreen_read() so it works no
+// matter which widget sits under the finger (LVGL press events stop at
+// clickable widgets like the analog dial and don't bubble to the screen).
 // LVGL's own gesture detector is not used either: it requires a minimum
 // *instantaneous velocity* at release, which pressure wobble on a resistive
-// panel rarely satisfies. A swipe here is pure displacement between press
-// and release: at least this many px of screen-horizontal travel, and more
-// horizontal than vertical by 2:1. A tap only wanders a few px.
+// panel rarely satisfies. A swipe is pure displacement between press and
+// release, measured on the UNFILTERED coordinates (the EMA lags a fast
+// flick and would understate it): any travel of at least this many px is a
+// gesture - the larger axis decides horizontal (face switch) vs vertical
+// (calendar month) - and only sub-threshold presses count as taps.
 #define TOUCH_SWIPE_MIN_PX 30
 
 // Set to 1 to print raw + mapped touch coordinates on the serial monitor.
@@ -621,6 +623,7 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static uint32_t last_ok_ms = 0;
   static bool     pressed = false;
   static int32_t  press_x = 0, press_y = 0;
+  static int32_t  raw_last_x = 0, raw_last_y = 0;   // unfiltered, for swipes
   static bool     swipe_armed = false;
   static float    flt_x = 0, flt_y = 0;
 
@@ -649,6 +652,9 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     if (x >= SCREEN_WIDTH)  x = SCREEN_WIDTH  - 1;
     if (y < 0) y = 0;
     if (y >= SCREEN_HEIGHT) y = SCREEN_HEIGHT - 1;
+
+    raw_last_x = x;
+    raw_last_y = y;
 
     if (!pressed) {
       // New press: remember where it started and seed the position filter.
@@ -681,32 +687,35 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   }
   else {
     if (pressed && swipe_armed && face_digital) {
-      // Release edge: displacement-based swipe check, in native coordinates.
-      // The display is rotated 270 degrees, so screen-horizontal movement is
-      // the native Y axis.
-      int32_t dh = last_y - press_y;
-      int32_t dv = last_x - press_x;
-      if (LV_ABS(dh) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dh) > 2 * LV_ABS(dv)) {
+      // Release edge: displacement-based gesture check on the UNFILTERED
+      // native coordinates (the EMA lags fast flicks). The display is
+      // rotated 270 degrees, so screen-horizontal movement is the native Y
+      // axis. Any travel past the threshold is a gesture, never a tap;
+      // the larger axis decides its meaning.
+      int32_t dh = raw_last_y - press_y;
+      int32_t dv = raw_last_x - press_x;
+      if (LV_MAX(LV_ABS(dh), LV_ABS(dv)) >= TOUCH_SWIPE_MIN_PX) {
         last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
-        // dh > 0 is a rightward swipe on screen (screen x = native y).
-        // Swipe left -> next face, swipe right -> previous face.
-        face_mode = (face_mode + (dh < 0 ? 1 : FACE_COUNT - 1)) % FACE_COUNT;
-        if (cal_off != 0) {           // leaving a browsed month snaps back
-          cal_off = 0;
+        if (LV_ABS(dh) >= LV_ABS(dv)) {
+          // dh > 0 is a rightward swipe on screen (screen x = native y).
+          // Swipe left -> next face, swipe right -> previous face.
+          face_mode = (face_mode + (dh < 0 ? 1 : FACE_COUNT - 1)) % FACE_COUNT;
+          if (cal_off != 0) {         // leaving a browsed month snaps back
+            cal_off = 0;
+            cal_refresh_now();
+          }
+          face_apply();
+          prefs.putInt("face", face_mode);
+        }
+        else if (face_mode == FACE_CAL) {
+          // Vertical swipe on the calendar browses months: up (dv > 0,
+          // since screen y runs against native x) -> next, down -> previous.
+          cal_off += (dv > 0) ? 1 : -1;
+          if (cal_off >  CAL_OFF_MAX) cal_off =  CAL_OFF_MAX;
+          if (cal_off < -CAL_OFF_MAX) cal_off = -CAL_OFF_MAX;
           cal_refresh_now();
         }
-        face_apply();
-        prefs.putInt("face", face_mode);
-      }
-      else if (face_mode == FACE_CAL &&
-               LV_ABS(dv) >= TOUCH_SWIPE_MIN_PX && LV_ABS(dv) > 2 * LV_ABS(dh)) {
-        // Vertical swipe on the calendar browses months: up (dv > 0, since
-        // screen y runs against native x) -> next, down -> previous.
-        last_gesture_ms = millis();
-        cal_off += (dv > 0) ? 1 : -1;
-        if (cal_off >  CAL_OFF_MAX) cal_off =  CAL_OFF_MAX;
-        if (cal_off < -CAL_OFF_MAX) cal_off = -CAL_OFF_MAX;
-        cal_refresh_now();
+        // Vertical swipes on other faces are consumed with no action.
       }
     }
     pressed = false;
