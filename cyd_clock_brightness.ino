@@ -664,14 +664,14 @@ static void sw_lap_record(void) {
 
 static void sw_lap_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (!sw_running) return;   // laps only make sense while running
   sw_lap_record();
 }
 
 static void sw_start_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;   // swipe tail, not a press
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;   // swipe tail, not a press
   if (sw_running) {
     sw_accum_ms += millis() - sw_t0;
     sw_running = false;
@@ -687,7 +687,7 @@ static void sw_start_cb(lv_event_t * e) {
 
 static void sw_reset_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   sw_running = false;
   sw_accum_ms = 0;
   sw_lap_shown = 0;
@@ -749,7 +749,7 @@ static void alarm_overlay_cb(lv_event_t * e) {
 }
 
 static void tm_add_cb(lv_event_t * e) {
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   uint32_t add_min = (uint32_t)(intptr_t)lv_event_get_user_data(e);
   tm_left_ms += add_min * 60000u;
   if (tm_left_ms > TIMER_MAX_MS) tm_left_ms = TIMER_MAX_MS;
@@ -758,7 +758,7 @@ static void tm_add_cb(lv_event_t * e) {
 
 static void tm_start_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (!tm_running && tm_left_ms == 0) return;   // nothing to count down
   tm_running = !tm_running;
   if (tm_running) tm_last_ms = millis();
@@ -767,7 +767,7 @@ static void tm_start_cb(lv_event_t * e) {
 
 static void tm_reset_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   tm_running = false;
   tm_left_ms = 0;
   lv_label_set_text(lbl_tm_start, LV_SYMBOL_PLAY);
@@ -816,7 +816,7 @@ static void sw_tm_tick(void) {
 // the CLICKED at the end of a swipe is filtered out here.
 static void screen_click_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (face_mode == FACE_ALARM) return;   // editing screen: background taps do nothing
   if (bl_panel && !lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN)) {
     bl_panel_hide();
@@ -843,19 +843,36 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
   static int32_t  peak_dh = 0, peak_dv = 0;         // largest RAW travel this press (swipes)
   static int32_t  peak_flt = 0;                     // largest FILTERED travel (tap test)
   static int      confirm_left = -1;                // press-confirmation frames still to skip
+  static int32_t  pend_x = 0, pend_y = 0;           // coords of the last skipped (pending) frame
+  static int      pend_z = 0;                       // its pressure
   static bool     swipe_armed = false;
   static float    flt_x = 0, flt_y = 0;
+  static int32_t  pre_x = 0, pre_y = 0;             // first light (pre-press) contact point
+  static bool     pre_valid = false;
+  static uint32_t pre_ms = 0;
+  static int      pre_frames = 0;                   // consecutive light-contact frames
+  static int32_t  prev_x = 0, prev_y = 0;           // previous raw sample, for per-frame speed
+  static int32_t  max_step = 0;                     // largest per-frame move this press
+  static bool     dispatched = false;               // PRESSED already reported to LVGL
+  static bool     gesture_mode = false;             // moved before dispatch: LVGL never sees it
+  static uint32_t press_ms = 0;                     // when the press was confirmed
 
   int32_t rx = 0, ry = 0;
   int z = xpt_frame(&rx, &ry);
   // Pressure hysteresis: firm to start, light to keep - a stylus tip's low
-  // pressure can hold a drag it could never have started.
-  bool contact = (z >= (pressed ? TOUCH_Z_RELEASE : TOUCH_Z_PRESS));
+  // pressure can hold a drag it could never have started. Once a contact
+  // has been seen (press confirmation pending) the hold level applies too,
+  // so a light swipe only has to cross TOUCH_Z_PRESS for a single frame.
+  bool contact = (z >= ((pressed || confirm_left >= 0) ? TOUCH_Z_RELEASE : TOUCH_Z_PRESS));
 
-  if (contact) {
+  // Coordinates are usable whenever there is any real contact (z at or
+  // above the hold level), even before the press level is reached.
+  bool coords_ok = (z >= TOUCH_Z_RELEASE);
+  int32_t x = 0, y = 0;
+  if (coords_ok) {
     // Native 240x320 space. LVGL applies the 270-degree rotation afterwards.
-    int32_t x = map(rx, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, 0, SCREEN_WIDTH  - 1);
-    int32_t y = map(ry, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, 0, SCREEN_HEIGHT - 1);
+    x = map(rx, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, 0, SCREEN_WIDTH  - 1);
+    y = map(ry, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, 0, SCREEN_HEIGHT - 1);
 
 #if TOUCH_INVERT_X
     x = (SCREEN_WIDTH  - 1) - x;
@@ -871,7 +888,29 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     if (x >= SCREEN_WIDTH)  x = SCREEN_WIDTH  - 1;
     if (y < 0) y = 0;
     if (y >= SCREEN_HEIGHT) y = SCREEN_HEIGHT - 1;
+  }
 
+  // Light pre-contact (touching, but below the press level): remember where
+  // the finger FIRST touched, so a swipe that starts softly is measured from
+  // its real origin instead of from the point where the pressure finally
+  // crossed TOUCH_Z_PRESS - otherwise the remaining travel looks like a tap.
+  if (coords_ok && !contact && !pressed) {
+    if (!pre_valid) { pre_x = x; pre_y = y; pre_ms = millis(); pre_valid = true; }
+    // A light touch that stays put never reaches TOUCH_Z_PRESS at all (a
+    // swipe does, as the finger presses harder while moving). If the light
+    // contact persists for TOUCH_LIGHT_PRESS_FRAMES it is a real touch:
+    // accept it as a press. Noise blips are gone within a frame or two.
+    if (++pre_frames >= TOUCH_LIGHT_PRESS_FRAMES) {
+      contact = true;
+      confirm_left = 0;   // the stable light frames already served as confirmation
+    }
+  } else if (!coords_ok) {
+    pre_valid = false;
+    pre_frames = 0;
+  }
+  if (pressed) pre_frames = 0;
+
+  if (contact) {
     // Press confirmation: the first contact frame(s) come from the
     // low-pressure onset and their coordinates often spike onto a
     // neighbouring button, so they are skipped and the press point is taken
@@ -881,6 +920,9 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       if (confirm_left < 0) confirm_left = TOUCH_PRESS_CONFIRM_FRAMES;
       if (confirm_left > 0) {
         confirm_left--;
+        pend_x = x;
+        pend_y = y;
+        pend_z = z;
         data->point.x = last_x;
         data->point.y = last_y;
         data->state = LV_INDEV_STATE_RELEASED;
@@ -905,10 +947,23 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       // the slider never flips faces.
       flt_x = (float)x;
       flt_y = (float)y;
-      press_x = x;
-      press_y = y;
-      peak_dh = peak_dv = 0;
-      peak_flt = 0;
+      if (pre_valid && millis() - pre_ms < TOUCH_PRE_CONTACT_MS) {
+        press_x = pre_x;            // gesture origin = where the finger first touched
+        press_y = pre_y;
+      } else {
+        press_x = x;
+        press_y = y;
+      }
+      pre_valid = false;
+      peak_dh = y - press_y;        // travel already covered during the soft onset
+      peak_dv = x - press_x;
+      peak_flt = LV_MAX(LV_ABS(peak_dh), LV_ABS(peak_dv));
+      prev_x = x;
+      prev_y = y;
+      max_step = 0;
+      dispatched = false;
+      gesture_mode = false;
+      press_ms = millis();
       swipe_armed = (bl_panel == NULL) ||
                     lv_obj_has_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -922,6 +977,26 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       int32_t fv = (int32_t)(flt_x + 0.5f) - press_x;
       int32_t ft = LV_MAX(LV_ABS(fh), LV_ABS(fv));
       if (ft > peak_flt) peak_flt = ft;
+      // Per-frame speed: a finger in motion moves several px per frame even
+      // when the press registered late and the total travel is short.
+      int32_t step = LV_MAX(LV_ABS(x - prev_x), LV_ABS(y - prev_y));
+      if (step > max_step) max_step = step;
+      prev_x = x;
+      prev_y = y;
+
+      // Touch slop: hold the press back from LVGL for TOUCH_PRESS_HOLD_MS.
+      // If the finger moves like a gesture within that window, LVGL never
+      // hears about the press at all (so a swipe that starts on a button
+      // does not light the button up, and still switches the face). If it
+      // stays put, the press is delivered once the window ends.
+      if (!dispatched && !gesture_mode) {
+        int32_t travel_now = LV_MAX(LV_ABS(peak_dh), LV_ABS(peak_dv));
+        if (travel_now >= TOUCH_TAP_MAX_PX || max_step >= TOUCH_MOVE_STEP_PX) {
+          gesture_mode = true;
+        } else if (millis() - press_ms >= TOUCH_PRESS_HOLD_MS) {
+          dispatched = true;
+        }
+      }
     }
 
 #if TOUCH_DEBUG
@@ -986,11 +1061,17 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
       int32_t dv = peak_dv;
       int32_t travel = LV_MAX(LV_ABS(dh), LV_ABS(dv));
       int32_t min_px = TOUCH_SWIPE_MIN_PX;
-      if (travel < min_px && peak_flt >= TOUCH_TAP_MAX_PX) {
-        last_gesture_ms = millis();   // ambiguous movement: swallow the click, do nothing
+      if (travel < min_px &&
+          (peak_flt >= TOUCH_TAP_MAX_PX || max_step >= TOUCH_MOVE_STEP_PX)) {
+        // Ambiguous: moved too much or too fast for a tap, but not far enough
+        // for a swipe (typically a swipe that registered late or broke up).
+        // Swallow the click, do nothing.
+        last_gesture_ms = millis();
+        handled = true;
       }
       else if (travel >= min_px) {
         last_gesture_ms = millis();   // the CLICKED that follows is a swipe tail
+        handled = true;
         if (LV_ABS(dh) >= LV_ABS(dv)) {
           // dh > 0 is a rightward swipe on screen (screen x = native y).
           // Swipe left -> next face, swipe right -> previous face.
@@ -1013,13 +1094,24 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
         // Vertical swipes on other faces are consumed with no action.
       }
     }
-    pressed = false;
-    confirm_left = -1;   // next contact starts a fresh confirmation
+
+    if (pressed && !dispatched && !handled) {
+      // The press was held back (gesture_mode from an early wobble, or the
+      // hold window never ran out) and turned out not to be a gesture: it
+      // is a tap after all. Deliver it late - PRESSED now, RELEASED after
+      // the debounce - instead of losing it.
+      dispatched = true;
+      gesture_mode = false;
+      last_ok_ms = millis();
+    } else {
+      pressed = false;
+      confirm_left = -1;   // next contact starts a fresh confirmation
+    }
   }
 
   data->point.x = last_x;
   data->point.y = last_y;
-  data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+  data->state = (pressed && dispatched) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 // ---- Width helpers -------------------------------------------------------
@@ -1378,7 +1470,7 @@ static void al_adjust_cb(lv_event_t * e) {
   lv_event_code_t code = lv_event_get_code(e);
   if (code == LV_EVENT_CLICKED) {
     if (repeated) { repeated = false; return; }
-    if (millis() - last_gesture_ms < 600) return;
+    if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   } else {
     repeated = true;
   }
@@ -1395,7 +1487,7 @@ static void al_adjust_cb(lv_event_t * e) {
 
 static void al_toggle_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   alarms[al_sel].enabled = !alarms[al_sel].enabled;
   al_update_label();
   al_mark_dirty();
@@ -1404,7 +1496,7 @@ static void al_toggle_cb(lv_event_t * e) {
 // Weekday toggles (user_data = tm_wday); the last selected day cannot be
 // cleared, so the alarm always has at least one day to ring on.
 static void al_day_cb(lv_event_t * e) {
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   int d = (int)(intptr_t)lv_event_get_user_data(e);
   alarm_t * a = &alarms[al_sel];
   uint8_t next = a->days ^ (uint8_t)(1 << d);
@@ -1420,7 +1512,7 @@ static void al_day_cb(lv_event_t * e) {
 // turning it off restores the days that were selected before.
 static void al_once_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   alarm_t * a = &alarms[al_sel];
   a->once = !a->once;
   if (a->once) {
@@ -1437,7 +1529,7 @@ static void al_once_cb(lv_event_t * e) {
 // next face (swipes work here too).
 static void al_done_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   if (al_dirty) al_save_now();
   face_mode = (face_mode + 1) % FACE_COUNT;
   face_apply();
@@ -1462,7 +1554,7 @@ static void time_fmt_apply(void) {
 
 static void h24_btn_cb(lv_event_t * e) {
   LV_UNUSED(e);
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   h24 = !h24;
   prefs.putInt("h24", h24 ? 1 : 0);
   time_fmt_apply();
@@ -1623,6 +1715,7 @@ static void create_analog_face(void) {
   };
   for (int i = 0; i < 3; i++) {
     lv_obj_t * l = lv_line_create(a_scale);
+    lv_obj_remove_flag(l, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_line_width(l, needle_sh[i].w, 0);
     lv_obj_set_style_line_rounded(l, true, 0);
     lv_obj_set_style_line_color(l, lv_color_black(), 0);
@@ -1910,6 +2003,10 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(THEMES[theme_idx].bg), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
   lv_obj_set_style_text_color(lv_screen_active(), lv_color_hex(0xFF3300), 0);
+  // Screens are scrollable by default; a >10 px wobble while pressing would
+  // start a scroll and cancel the button's click (PRESS_LOST). Nothing here
+  // scrolls, so turn it off.
+  lv_obj_remove_flag(lv_screen_active(), LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(lv_screen_active(), screen_click_cb, LV_EVENT_CLICKED, NULL);
 
   // Everything of the digital face hangs off this container so one flag
@@ -2328,6 +2425,9 @@ void setup() {
   lv_indev_t * indev = lv_indev_create();
   lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
   lv_indev_set_read_cb(indev, touchscreen_read);
+  // Poll the panel more often than LVGL's 33 ms default so fast swipes
+  // leave enough samples behind to measure their travel.
+  lv_timer_set_period(lv_indev_get_read_timer(indev), TOUCH_READ_PERIOD_MS);
 
   // Boot status screen, replaced by the clock once time is known.
   // Uses the restored theme so a dark clock does not boot blinding white.
