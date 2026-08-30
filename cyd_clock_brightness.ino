@@ -292,6 +292,7 @@ static uint32_t   tm_left_ms = 0;
 static uint32_t   tm_last_ms = 0;     // millis() of the previous countdown tick
 static bool       alarm_on = false;
 static uint32_t   alarm_t0 = 0;
+static int        alarm_phase = -1;   // last beep/flash phase applied (-1: none yet)
 static uint32_t   alarm_limit_ms = 0;   // ring at most this long (timer vs wake alarm)
 
 static lv_obj_t * face_alarm;           // wake-up alarm clock
@@ -719,6 +720,10 @@ static void tm_update_label(void) {
 }
 
 static void alarm_stop(void) {
+#if TOUCH_DEBUG
+  Serial.printf("ALARM stop (was %s, rang %lums)\n", alarm_on ? "on" : "off",
+                (unsigned long)(millis() - alarm_t0));
+#endif
   alarm_on = false;
   spk_tone(0);
   if (alarm_overlay) lv_obj_add_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -738,13 +743,22 @@ static void al_save_now(void) {
 }
 
 static void alarm_start(uint32_t limit_ms) {
+#if TOUCH_DEBUG
+  Serial.printf("ALARM start limit=%lums overlay=%p hidden=%d\n", (unsigned long)limit_ms,
+                (void *)alarm_overlay,
+                alarm_overlay ? (int)lv_obj_has_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN) : -1);
+#endif
   alarm_on = true;
   alarm_t0 = millis();
+  alarm_phase = -1;   // first tick applies tone + overlay opacity at once
   alarm_limit_ms = limit_ms;
   if (alarm_overlay) lv_obj_remove_flag(alarm_overlay, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void alarm_overlay_cb(lv_event_t * e) {
+#if TOUCH_DEBUG
+  Serial.printf("ALARM overlay got event %d\n", (int)lv_event_get_code(e));
+#endif
   alarm_stop();
   // The overlay is hidden now, but the finger is still down. Without this
   // LVGL would look for a new object under the finger on the next frame
@@ -799,9 +813,18 @@ static void sw_tm_tick(void) {
   }
 
   if (alarm_on) {
-    bool phase = ((millis() - alarm_t0) / 400) & 1;
-    spk_tone(phase ? ALARM_TONE_HZ : 0);
-    lv_obj_set_style_bg_opa(alarm_overlay, phase ? LV_OPA_50 : LV_OPA_10, 0);
+    // Beep/flash in 400 ms phases. Only touch the tone and the overlay when
+    // the phase actually flips: LVGL redraws the whole screen on every style
+    // set (even to the same value), so this repainted the full panel every
+    // 100 ms; while it did, a firm finger read as "no contact" on most
+    // frames (display/SPI activity coupling into the resistive layer) and
+    // the alarm could take a dozen taps to silence.
+    int phase = ((millis() - alarm_t0) / 400) & 1;
+    if (phase != alarm_phase) {
+      alarm_phase = phase;
+      spk_tone(phase ? ALARM_TONE_HZ : 0);
+      lv_obj_set_style_bg_opa(alarm_overlay, phase ? LV_OPA_50 : LV_OPA_10, 0);
+    }
     if (millis() - alarm_t0 > alarm_limit_ms) alarm_stop();
   }
 
@@ -861,6 +884,21 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
 #endif
   int32_t rx = 0, ry = 0;
   int z = xpt_frame(&rx, &ry);
+
+  // Rail check: a real touch never drives an axis to the ADC rails (this
+  // panel's corners sit at 315..3837 / 154..3718). A reading at 0 or 4095
+  // is the panel floating - typically the frame right after a finger
+  // lifts, when X saturates while Z still shows ~100 of noise - and would
+  // otherwise pass the pressure threshold as a ghost tap in a corner.
+  if (rx < TOUCH_RAW_RAIL || rx > 4095 - TOUCH_RAW_RAIL ||
+      ry < TOUCH_RAW_RAIL || ry > 4095 - TOUCH_RAW_RAIL) {
+#if TOUCH_DEBUG
+    if (z >= TOUCH_Z_RELEASE)
+      Serial.printf("  rail: raw=(%ld,%ld) z=%d -> not a contact\n", (long)rx, (long)ry, z);
+#endif
+    z = 0;
+  }
+
   // Pressure hysteresis: firm to start, light to keep - a stylus tip's low
   // pressure can hold a drag it could never have started. Once a contact
   // has been seen (press confirmation pending) the hold level applies too,
@@ -884,21 +922,6 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
 #endif
 
     x += TOUCH_TRIM_X;
-
-  // Rail check: a real touch never drives an axis to the ADC rails (this
-  // panel's corners sit at 315..3837 / 154..3718). A reading at 0 or 4095
-  // is the panel floating - typically the frame right after a finger
-  // lifts, when X saturates while Z still shows ~100 of noise - and would
-  // otherwise pass the pressure threshold as a ghost tap in a corner.
-  if (rx < TOUCH_RAW_RAIL || rx > 4095 - TOUCH_RAW_RAIL ||
-      ry < TOUCH_RAW_RAIL || ry > 4095 - TOUCH_RAW_RAIL) {
-#if TOUCH_DEBUG
-    if (z >= TOUCH_Z_RELEASE)
-      Serial.printf("  rail: raw=(%ld,%ld) z=%d -> not a contact\n", (long)rx, (long)ry, z);
-#endif
-    z = 0;
-  }
-
     y += TOUCH_TRIM_Y;
 
     if (x < 0) x = 0;
@@ -1005,7 +1028,7 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
                   (long)peak_flt, TOUCH_TAP_MAX_PX,
                   (long)dbg_step, (long)max_step, TOUCH_MOVE_STEP_PX,
                   indev->pointer.act_obj == NULL || indev->pointer.act_obj == lv_screen_active()
-                      ? "on background" : "on widget");
+                      ? "on background" : indev->pointer.act_obj == alarm_overlay ? "on ALARM OVERLAY" : "on widget");
 #endif
 
     last_x = (int32_t)(flt_x + 0.5f);
