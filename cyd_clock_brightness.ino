@@ -8,6 +8,9 @@
       - larger time and seconds, small AM/PM, Korean weekday
       - the weekday turns red on Sundays and Korean public holidays
         (built-in table for 2026-2030, substitute holidays included)
+      - bottom line shows the Korean lunar date and the current solar
+        term, e.g. "음 7.11  입추" (tables in korean_calendar.h,
+        NanumGothic subset font in lunar_font.h)
       - every field has a fixed width so nothing shifts when the digits change
       - touch the screen to bring up a backlight brightness slider
         (XPT2046 touch + LEDC PWM on the backlight pin, value kept in NVS)
@@ -46,6 +49,8 @@
 #include "esp_sntp.h"
 
 #include "clock_fonts.h"
+#include "lunar_font.h"
+#include "korean_calendar.h"
 
 // Wi-Fi credentials live in secrets.h (gitignored).
 // Copy secrets.h.example to secrets.h and fill in your own.
@@ -73,6 +78,9 @@ uint32_t draw_buf[DRAW_BUF_SIZE / 4];
 #define FONT_DATENUM  &font_dseg_26        // date digits
 #define FONT_KR       &font_kr_26          // weekday
 #define FONT_AMPM     &lv_font_montserrat_20   // must be enabled in lv_conf.h
+#define FONT_LUNAR    &font_kr_lunar_22    // lunar date + solar term line
+
+#define LUNAR_COLOR   lv_color_hex(0x777777)
 
 #define SHOW_GHOST_SEGMENTS 0
 #define GHOST_COLOR lv_color_hex(0xDDDDDD)
@@ -236,6 +244,7 @@ static lv_obj_t * label_hm;
 static lv_obj_t * label_sec;
 static lv_obj_t * label_datenum;
 static lv_obj_t * label_wd;
+static lv_obj_t * label_lunar;
 
 static lv_obj_t * bl_panel;
 static lv_obj_t * bl_slider;
@@ -471,6 +480,20 @@ static void timer_cb(lv_timer_t * timer) {
     lv_label_set_text(label_wd, buf);
     lv_obj_set_style_text_color(label_wd,
         is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL, 0);
+
+    // Bottom line: lunar date + current solar-term period, e.g. "음 7.11  입추".
+    // Either part is dropped silently once its table runs out of years.
+    klc_date_t ld;
+    const char * term = kst_current_term(&t);
+    char lbuf[48];
+    if (klc_solar_to_lunar(&t, &ld)) {
+      snprintf(lbuf, sizeof(lbuf), "음 %s%d.%d%s%s",
+               ld.leap ? "윤" : "", ld.month, ld.day,
+               term ? "  " : "", term ? term : "");
+    } else {
+      snprintf(lbuf, sizeof(lbuf), "%s", term ? term : "");
+    }
+    lv_label_set_text(label_lunar, lbuf);
   }
 
   // Hide the brightness panel once the user stops touching it
@@ -634,6 +657,17 @@ void lv_create_main_gui(void) {
   lv_obj_set_width(label_sec, w_col);
   lv_obj_set_style_text_align(label_sec, LV_TEXT_ALIGN_CENTER, 0);
   // lv_obj_set_style_text_color(label_sec, lv_color_hex(0x992000), 0);
+
+  // ================= Bottom line: 음력 날짜 + 절기 ====================
+  static lv_style_t style_lunar;
+  lv_style_init(&style_lunar);
+  lv_style_set_text_font(&style_lunar, FONT_LUNAR);
+
+  label_lunar = lv_label_create(lv_screen_active());
+  lv_label_set_text(label_lunar, "");
+  lv_obj_add_style(label_lunar, &style_lunar, 0);
+  lv_obj_set_style_text_color(label_lunar, LUNAR_COLOR, 0);
+  lv_obj_align(label_lunar, LV_ALIGN_BOTTOM_MID, 0, -4);
 
   create_brightness_panel();
   bl_set_pct(bl_pct);   // syncs the label with the restored value
