@@ -6,8 +6,7 @@
  *   font_dseg_lunar_26 - DSEG7 Classic Italic 26 px "0123456789.",
  *                        same face/size as font_dseg_26 in clock_fonts.h
  *   font_dseg_lunar_20 - 20 px variant with ':' and space added
- *                        ("0123456789.: "), for the analog face's info
- *                        column and the stopwatch lap lines
+ *                        ("0123456789.: "), for the stopwatch lap lines
  *
  * NanumGothic (c) NAVER - SIL Open Font License 1.1
  * DSEG (c) Keshikan - SIL Open Font License 1.1

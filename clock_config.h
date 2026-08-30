@@ -49,7 +49,7 @@
 #define FONT_AMPM     &font_dseg14_ampm_20
 #define FONT_LUNAR         &font_kr_lunar_22     // "음"/"윤", 절기·명절 이름
 #define FONT_LUNAR_NUM     &font_dseg_lunar_26   // 음력 숫자(디지털 화면, 달력 제목)
-#define FONT_LUNAR_NUM_SM  &font_dseg_lunar_20   // 음력 숫자(아날로그 정보 열, 작은 것)
+#define FONT_LUNAR_NUM_SM  &font_dseg_lunar_20   // 작은 DSEG 숫자(스톱워치 랩 줄)
 
 // 1로 켜면 HH:MM 뒤에 "88:88"의 꺼진 세그먼트를 GHOST_COLOR로 옅게 그려
 // 실제 LCD처럼 보임. 어두운 테마에서는 GHOST_COLOR를 어두운 값으로 바꿔야 함.
@@ -157,14 +157,14 @@ static const theme_t THEMES[] = {
  * 6. 아날로그 화면
  * ========================================================================= */
 
-// 다이얼 지름(px). 화면 높이가 240이므로 베젤 포함 220 안쪽을 권장.
-// 키우면 오른쪽 정보 열(116px) 공간이 줄어 글자가 잘릴 수 있음.
-#define ANALOG_DIAL_SIZE  188
+// 다이얼 지름(px). 화면 정중앙에 하나만 놓이며, 베젤(ANALOG_BEZEL_W x 2)과
+// 아래쪽 그림자까지 240px 높이 안에 들어가려면 204~210 정도가 한계.
+#define ANALOG_DIAL_SIZE  204
 
-// 바늘 길이(px, 중심 기준). 다이얼 반지름(94) 안쪽이어야 눈금과 겹치지 않음.
-#define ANALOG_HOUR_LEN   48
-#define ANALOG_MIN_LEN    68
-#define ANALOG_SEC_LEN    78
+// 바늘 길이(px, 중심 기준). 다이얼 반지름(102) 안쪽이어야 눈금과 겹치지 않음.
+#define ANALOG_HOUR_LEN   52
+#define ANALOG_MIN_LEN    74
+#define ANALOG_SEC_LEN    84
 
 /* =========================================================================
  * 7. 달력 · 스톱워치
@@ -353,7 +353,8 @@ static const theme_t THEMES[] = {
  *    오늘, 지났으면 내일; 시각을 바꾸면 따라 갱신) 한 번 울린 뒤 스스로 OFF,
  *    1x를 끄면 이전 요일 선택이 복원됨. 요일을 직접 바꾸면 1x는 꺼짐.
  *    🔔 버튼으로 ON/OFF. 선택 버튼의
- *    🔔 표시는 그 알람이 ON이라는 뜻. 이 화면에서는 바탕 탭이 무시됨(스와이프는
+ *    🔔 표시는 그 알람이 ON이라는 뜻. 시계 화면 우하단에는 알람마다 종 아이콘이
+ *    하나씩 있고 OFF면 사선이 그어짐. 이 화면에서는 바탕 탭이 무시됨(스와이프는
  *    다른 화면과 동일). ✓ OK 버튼은 설정을 NVS에 저장하고 다음 화면으로 넘어감.
  * ========================================================================= */
 

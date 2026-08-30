@@ -20,8 +20,8 @@
       - a consistent raised, top-lit look on every face: bezel + shadows
         on the analog dial, a card plate behind the digital / calendar /
         stopwatch / timer content, embossed HH:MM, raised buttons
-      - analog face (lv_scale dial + line needles) with a compact info
-        column, and a monthly calendar face (holiday-aware, today
+      - analog face (one large centered lv_scale dial + line needles),
+        and a monthly calendar face (holiday-aware, today
         highlighted); swipe left/right to cycle faces, choice kept in NVS
       - stopwatch and countdown-timer faces; the timer rings the CYD's
         speaker (GPIO 26) and flashes the screen until tapped
@@ -297,8 +297,7 @@ static lv_obj_t * face_alarm;           // wake-up alarm clock
 static lv_obj_t * label_al_time;        // "07:30" in the big DSEG face
 static lv_obj_t * label_al_ampm;
 static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
-static lv_obj_t * label_bell;           // bell indicator on the digital face
-static lv_obj_t * label_bell_a;         // same, on the analog face
+static lv_obj_t * bell_box[2][ALARM_COUNT]; // per-alarm bell icons: [0] digital, [1] analog
 // alarm_t itself is declared in clock_config.h: the Arduino IDE inserts
 // auto-generated function prototypes right after the #includes, and a
 // prototype taking alarm_t* needs the type to exist by then.
@@ -321,13 +320,6 @@ static lv_obj_t * a_needle_s;
 static lv_obj_t * a_needle_h_sh;      // shadow copies, drawn under the needles
 static lv_obj_t * a_needle_m_sh;
 static lv_obj_t * a_needle_s_sh;
-static lv_obj_t * label_a_ampm;
-static lv_obj_t * label_a_wd;
-static lv_obj_t * label_a_date;       // "08-23"
-static lv_obj_t * label_a_lunar_pre;  // "음" / "음 윤"
-static lv_obj_t * label_a_lunar_num;  // "7.11" in DSEG
-static lv_obj_t * label_a_term;
-static lv_obj_t * label_a_event;
 
 static int      face_mode = 0;        // 0 = digital, 1 = analog (kept in NVS)
 static uint32_t last_gesture_ms = 0;
@@ -942,11 +934,46 @@ static void touchscreen_read(lv_indev_t * indev, lv_indev_data_t * data) {
     last_ok_ms = millis();
     pressed = true;
   }
+  else if (!pressed && confirm_left >= 0 && confirm_left < TOUCH_PRESS_CONFIRM_FRAMES &&
+           pend_z >= TOUCH_Z_SHORT_TAP) {
+    // The contact ended before confirmation, i.e. a very short tap that was
+    // above threshold for a single frame. Don't lose it: press at that
+    // frame's point now; the release debounce below turns it into a normal
+    // press/release pair for LVGL a moment later. Only for a FIRM single
+    // frame (pend_z >= TOUCH_Z_SHORT_TAP): a light one-frame blip is noise
+    // and would be a ghost touch.
+    flt_x = (float)pend_x;
+    flt_y = (float)pend_y;
+    last_x = pend_x;
+    last_y = pend_y;
+    press_x = pend_x;
+    press_y = pend_y;
+    peak_dh = peak_dv = peak_flt = max_step = 0;
+    swipe_armed = false;         // too short to be a gesture anyway
+    confirm_left = -1;
+    last_ok_ms = millis();
+    pressed = true;
+    dispatched = true;
+    gesture_mode = false;
+  }
   else if (pressed && (millis() - last_ok_ms) < TOUCH_RELEASE_DEBOUNCE_MS) {
-    // Momentary pressure dip mid-drag: hold the last position.
+    // Momentary pressure dip mid-drag: hold the last position. A tap that
+    // ended before the hold window ran out is delivered now, so LVGL sees a
+    // press during the debounce and the release right after it.
+    if (!dispatched && !gesture_mode) dispatched = true;
   }
   else {
-    if (pressed && swipe_armed && face_digital) {
+    // Presses that began on a clickable widget (a button, the slider) belong
+    // to that widget: no gesture classification for them, so a finger that
+    // wobbles or rolls on a button can neither be swallowed as "ambiguous"
+    // nor turned into a swipe. Gestures start on the background, labels or
+    // the analog dial - everything that lets the press fall through to the
+    // screen.
+    lv_obj_t * act_obj = lv_indev_get_active_obj();
+    bool on_widget = (act_obj != NULL && act_obj != lv_screen_active());
+    bool handled = false;   // consumed as a swipe or as ambiguous movement
+
+    if (pressed && swipe_armed && face_digital && (gesture_mode || !on_widget)) {
       // Release edge. The display is rotated 270 degrees, so
       // screen-horizontal movement is the native Y axis. Three outcomes:
       //   raw peak travel >= TOUCH_SWIPE_MIN_PX  -> gesture, larger axis decides
@@ -1135,9 +1162,6 @@ static void timer_cb(lv_timer_t * timer) {
 
     char ampm[4];
     strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
-    // The analog dial is inherently 12-hour, so its AM/PM tag stays on in
-    // both formats - it is the only thing separating 2 am from 2 pm there.
-    lv_label_set_text(label_a_ampm, ampm);
 
     if (h24) {
       snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
@@ -1164,13 +1188,9 @@ static void timer_cb(lv_timer_t * timer) {
     lv_label_set_text(label_datenum, buf);
     snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[t.tm_wday]);
     lv_label_set_text(label_wd, buf);
-    lv_label_set_text(label_a_wd, buf);
     lv_color_t wdc = kr_is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL;
     lv_obj_set_style_text_color(label_wd, wdc, 0);
-    lv_obj_set_style_text_color(label_a_wd, wdc, 0);
 
-    snprintf(buf, sizeof(buf), "%02d-%02d", t.tm_mon + 1, t.tm_mday);
-    lv_label_set_text(label_a_date, buf);
 
     cal_refresh(&t);
 
@@ -1194,12 +1214,8 @@ static void timer_cb(lv_timer_t * timer) {
       lv_label_set_text(label_lunar_event, ev);
       lv_obj_set_style_text_color(label_lunar_event, evc, 0);
       lv_obj_remove_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(label_a_event, ev);
-      lv_obj_set_style_text_color(label_a_event, evc, 0);
-      lv_obj_remove_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_event, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
     }
 
     if (have_lunar) {
@@ -1208,17 +1224,11 @@ static void timer_cb(lv_timer_t * timer) {
       snprintf(nbuf, sizeof(nbuf), "%d.%d", ld.month, ld.day);
       lv_label_set_text(label_lunar_pre, pre);
       lv_label_set_text(label_lunar_num, nbuf);
-      lv_label_set_text(label_a_lunar_pre, pre);
-      lv_label_set_text(label_a_lunar_num, nbuf);
       lv_obj_remove_flag(label_lunar_pre, LV_OBJ_FLAG_HIDDEN);
       lv_obj_remove_flag(label_lunar_num, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_remove_flag(label_a_lunar_pre, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_remove_flag(label_a_lunar_num, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_pre, LV_OBJ_FLAG_HIDDEN);
       lv_obj_add_flag(label_lunar_num, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(label_a_lunar_pre, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(label_a_lunar_num, LV_OBJ_FLAG_HIDDEN);
     }
 
     bool term_today = false;
@@ -1228,12 +1238,8 @@ static void timer_cb(lv_timer_t * timer) {
       lv_label_set_text(label_lunar_term, term);
       lv_obj_set_style_text_color(label_lunar_term, tc, 0);
       lv_obj_remove_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
-      lv_label_set_text(label_a_term, term);
-      lv_obj_set_style_text_color(label_a_term, tc, 0);
-      lv_obj_remove_flag(label_a_term, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(label_a_term, LV_OBJ_FLAG_HIDDEN);
     }
   }
 
@@ -1258,10 +1264,53 @@ static void al_style_toggle(lv_obj_t * b, bool on) {
   lv_obj_set_style_text_opa(lv_obj_get_child(b, 0), on ? LV_OPA_COVER : LV_OPA_60, 0);
 }
 
+// One alarm indicator: a bell glyph with a diagonal slash drawn over it
+// while that alarm is OFF (LVGL's symbol font has no bell-slash glyph).
+static lv_obj_t * make_bell(lv_obj_t * parent) {
+  static const lv_point_precise_t slash[2] = { {2, 13}, {13, 2} };
+  lv_obj_t * box = make_box(parent);
+  lv_obj_set_size(box, 15, 15);
+  lv_obj_t * l = lv_label_create(box);
+  lv_label_set_text(l, LV_SYMBOL_BELL);
+  lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+  lv_obj_center(l);
+  lv_obj_t * ln = lv_line_create(box);
+  lv_line_set_points(ln, slash, 2);
+  lv_obj_set_style_line_width(ln, 2, 0);
+  lv_obj_set_style_line_rounded(ln, true, 0);
+  lv_obj_set_style_line_color(ln, lv_color_hex(0xFF3300), 0);
+  lv_obj_remove_flag(ln, LV_OBJ_FLAG_CLICKABLE);
+  return box;
+}
+
+// Row of ALARM_COUNT bells in a face's bottom-right corner.
+static void make_bell_row(lv_obj_t * face, int which) {
+  lv_obj_t * row = make_box(face);
+  lv_obj_set_size(row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+  lv_obj_align(row, LV_ALIGN_BOTTOM_RIGHT, -10, -12);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_style_pad_column(row, 2, 0);
+  for (int i = 0; i < ALARM_COUNT; i++) bell_box[which][i] = make_bell(row);
+}
+
+static void bells_refresh(void) {
+  for (int f = 0; f < 2; f++) {
+    for (int i = 0; i < ALARM_COUNT; i++) {
+      lv_obj_t * box = bell_box[f][i];
+      if (!box) continue;
+      bool on = alarms[i].enabled;
+      lv_obj_set_style_text_opa(lv_obj_get_child(box, 0), on ? LV_OPA_COVER : LV_OPA_50, 0);
+      lv_obj_t * slash = lv_obj_get_child(box, 1);
+      if (on) lv_obj_add_flag(slash, LV_OBJ_FLAG_HIDDEN);
+      else    lv_obj_remove_flag(slash, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
 // Repaint the alarm face for the selected alarm (time in the current 12/24 h
 // format, weekday and 1x toggles, ON/OFF button), the [1][2][3] selector
-// (a bell marks alarms that are ON) and the bell indicators on the clock
-// faces (shown while any alarm is ON).
+// (a bell marks alarms that are ON) and the per-alarm bell indicators on
+// the clock faces (slashed while that alarm is OFF).
 static void al_update_label(void) {
   if (!label_al_time) return;
   const alarm_t * a = &alarms[al_sel];
@@ -1295,16 +1344,12 @@ static void al_update_label(void) {
   lv_label_set_text(label_al_time, buf);
   lv_label_set_text(lbl_al_toggle, a->enabled ? LV_SYMBOL_BELL " ON" : LV_SYMBOL_MUTE " OFF");
 
-  lv_obj_t * bells[2] = { label_bell, label_bell_a };
-  for (int i = 0; i < 2; i++) {
-    if (!bells[i]) continue;
-    if (any_on) lv_obj_remove_flag(bells[i], LV_OBJ_FLAG_HIDDEN);
-    else        lv_obj_add_flag(bells[i], LV_OBJ_FLAG_HIDDEN);
-  }
+  LV_UNUSED(any_on);
+  bells_refresh();
 }
 
 static void al_sel_cb(lv_event_t * e) {
-  if (millis() - last_gesture_ms < 600) return;
+  if (millis() - last_gesture_ms < TOUCH_TAP_GUARD_MS) return;
   al_sel = (int)(intptr_t)lv_event_get_user_data(e);
   al_update_label();
 }
@@ -1506,7 +1551,7 @@ static void create_brightness_panel(void) {
   lv_obj_add_flag(bl_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
-// ============ Analog face: [ dial ][ AM (일) / 08-23 / 음 7.11 / 입추 ] ====
+// ============ Analog face: one big dial, centered ==========================
 static void create_analog_face(void) {
   face_analog = make_box(lv_screen_active());
   lv_obj_set_size(face_analog, lv_pct(100), lv_pct(100));
@@ -1519,7 +1564,7 @@ static void create_analog_face(void) {
   lv_obj_remove_style_all(a_bezel);
   lv_obj_remove_flag(a_bezel, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_size(a_bezel, bezel_size, bezel_size);
-  lv_obj_align(a_bezel, LV_ALIGN_LEFT_MID, 8 - ANALOG_BEZEL_W, 0);
+  lv_obj_align(a_bezel, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_radius(a_bezel, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_opa(a_bezel, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_grad_dir(a_bezel, LV_GRAD_DIR_VER, 0);
@@ -1532,7 +1577,7 @@ static void create_analog_face(void) {
   lv_obj_remove_style_all(a_face);
   lv_obj_remove_flag(a_face, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_size(a_face, ANALOG_DIAL_SIZE, ANALOG_DIAL_SIZE);
-  lv_obj_align(a_face, LV_ALIGN_LEFT_MID, 8, 0);
+  lv_obj_align(a_face, LV_ALIGN_CENTER, 0, 0);
   lv_obj_set_style_radius(a_face, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_opa(a_face, LV_OPA_COVER, 0);
   lv_obj_set_style_bg_grad_dir(a_face, LV_GRAD_DIR_VER, 0);
@@ -1544,8 +1589,11 @@ static void create_analog_face(void) {
   // minute; the 61 ticks still land on every 60th unit, so the dial itself
   // looks the same.
   a_scale = lv_scale_create(face_analog);
+  // Not clickable (nor its needles below): a tap on the dial must reach the
+  // screen so it opens the brightness panel like everywhere else.
+  lv_obj_remove_flag(a_scale, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_size(a_scale, ANALOG_DIAL_SIZE, ANALOG_DIAL_SIZE);
-  lv_obj_align(a_scale, LV_ALIGN_LEFT_MID, 8, 0);
+  lv_obj_align(a_scale, LV_ALIGN_CENTER, 0, 0);
   lv_scale_set_mode(a_scale, LV_SCALE_MODE_ROUND_INNER);
   lv_scale_set_range(a_scale, 0, 3600);
   lv_scale_set_angle_range(a_scale, 360);
@@ -1585,14 +1633,17 @@ static void create_analog_face(void) {
   }
 
   a_needle_h = lv_line_create(a_scale);
+  lv_obj_remove_flag(a_needle_h, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_line_width(a_needle_h, 5, 0);
   lv_obj_set_style_line_rounded(a_needle_h, true, 0);
 
   a_needle_m = lv_line_create(a_scale);
+  lv_obj_remove_flag(a_needle_m, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_line_width(a_needle_m, 3, 0);
   lv_obj_set_style_line_rounded(a_needle_m, true, 0);
 
   a_needle_s = lv_line_create(a_scale);
+  lv_obj_remove_flag(a_needle_s, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_line_width(a_needle_s, 2, 0);
   lv_obj_set_style_line_color(a_needle_s, lv_color_hex(0xFF3300), 0);
 
@@ -1614,74 +1665,8 @@ static void create_analog_face(void) {
   lv_obj_set_style_shadow_color(a_cap, lv_color_black(), 0);
   lv_obj_center(a_cap);
 
-  // ---- Info column on the right (~116 px wide)
-  static lv_style_t style_a_kr;
-  lv_style_init(&style_a_kr);
-  lv_style_set_text_font(&style_a_kr, FONT_LUNAR);
-
-  lv_obj_t * col = make_box(face_analog);
-  lv_obj_set_size(col, 116, LV_SIZE_CONTENT);
-  lv_obj_align(col, LV_ALIGN_RIGHT_MID, -2, 0);
-  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_row(col, 6, 0);
-
-  // [ AM ][ (일) ]
-  lv_obj_t * wdrow = make_box(col);
-  lv_obj_set_size(wdrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(wdrow, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(wdrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(wdrow, 6, 0);
-
-  label_a_ampm = lv_label_create(wdrow);
-  lv_label_set_text(label_a_ampm, "AM");
-  lv_obj_set_style_text_font(label_a_ampm, FONT_AMPM, 0);
-
-  label_a_wd = lv_label_create(wdrow);
-  lv_label_set_text(label_a_wd, "(일)");
-  lv_obj_set_style_text_font(label_a_wd, FONT_KR, 0);
-  lv_obj_set_style_text_color(label_a_wd, WEEKDAY_COLOR_NORMAL, 0);
-
-  label_a_date = lv_label_create(col);
-  lv_label_set_text(label_a_date, "01-01");
-  lv_obj_set_style_text_font(label_a_date, FONT_DATENUM, 0);
-
-  // [ 음 ][ 7.11 ]
-  lv_obj_t * lrow = make_box(col);
-  lv_obj_set_size(lrow, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(lrow, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(lrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(lrow, 4, 0);
-  lv_obj_set_style_text_color(lrow, LUNAR_COLOR, 0);
-
-  label_a_lunar_pre = lv_label_create(lrow);
-  lv_label_set_text(label_a_lunar_pre, "");
-  lv_obj_add_style(label_a_lunar_pre, &style_a_kr, 0);
-  lv_obj_set_style_translate_y(label_a_lunar_pre, 3, 0);
-
-  label_a_lunar_num = lv_label_create(lrow);
-  lv_label_set_text(label_a_lunar_num, "");
-  lv_obj_set_style_text_font(label_a_lunar_num, FONT_LUNAR_NUM_SM, 0);
-
-  label_a_term = lv_label_create(col);
-  lv_label_set_text(label_a_term, "");
-  lv_obj_add_style(label_a_term, &style_a_kr, 0);
-  lv_obj_set_style_text_color(label_a_term, LUNAR_COLOR, 0);
-  lv_obj_add_flag(label_a_term, LV_OBJ_FLAG_HIDDEN);
-
-  label_a_event = lv_label_create(col);
-  lv_label_set_text(label_a_event, "");
-  lv_obj_add_style(label_a_event, &style_a_kr, 0);
-  lv_obj_set_width(label_a_event, 116);          // long names wrap
-  lv_obj_set_style_text_align(label_a_event, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_add_flag(label_a_event, LV_OBJ_FLAG_HIDDEN);
-
-  // Alarm bell in the same bottom-right spot as on the digital face
-  label_bell_a = lv_label_create(face_analog);
-  lv_label_set_text(label_bell_a, LV_SYMBOL_BELL);
-  lv_obj_set_style_text_font(label_bell_a, &lv_font_montserrat_20, 0);
-  lv_obj_align(label_bell_a, LV_ALIGN_BOTTOM_RIGHT, -14, -18);
-  lv_obj_add_flag(label_bell_a, LV_OBJ_FLAG_HIDDEN);
+  // Alarm bells in the same bottom-right spot as on the digital face
+  make_bell_row(face_analog, 1);
   // Colors are applied by theme_apply() from lv_create_main_gui() once
   // every face exists - calling it here would leave the cards of the faces
   // created later (calendar, stopwatch, timer) at LVGL's default white.
@@ -1934,12 +1919,8 @@ void lv_create_main_gui(void) {
   // Plate under the three rows (content spans y 28..212 -> 14..226 plate)
   make_card(face_digital, 312, 212, LV_ALIGN_CENTER, 0, 0, DEPTH_SHADOW_W);
 
-  // Bell in the plate's bottom-right corner while the wake-up alarm is set
-  label_bell = lv_label_create(face_digital);
-  lv_label_set_text(label_bell, LV_SYMBOL_BELL);
-  lv_obj_set_style_text_font(label_bell, &lv_font_montserrat_20, 0);
-  lv_obj_align(label_bell, LV_ALIGN_BOTTOM_RIGHT, -14, -18);
-  lv_obj_add_flag(label_bell, LV_OBJ_FLAG_HIDDEN);
+  // One bell per alarm in the plate's bottom-right corner (slashed when OFF)
+  make_bell_row(face_digital, 0);
 
   // ---- Styles
   static lv_style_t style_time;
