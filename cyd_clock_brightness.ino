@@ -592,7 +592,11 @@ void lv_create_main_gui(void) {
   // ================= Date row: [ 2026-08-21 ][ (금) ] =================
   lv_obj_t * date_row = make_box(lv_screen_active());
   lv_obj_set_size(date_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(date_row, LV_ALIGN_CENTER, 0, -49);
+  // Row offsets place the whole block (date / time / lunar line) with equal
+  // top and bottom margins: content spans y 30..209 on the 240 px panel,
+  // ~31 px of margin on each side. Derived from the font line heights
+  // (date 27, time 69, lunar 22) with the inter-row gaps kept as designed.
+  lv_obj_align(date_row, LV_ALIGN_CENTER, 0, -76);
   lv_obj_set_flex_flow(date_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(date_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(date_row, 8, 0);
@@ -615,7 +619,7 @@ void lv_create_main_gui(void) {
   // ================= Time row: [ HH:MM ][ AM/PM over SS ] =================
   lv_obj_t * time_row = make_box(lv_screen_active());
   lv_obj_set_size(time_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_align(time_row, LV_ALIGN_CENTER, 0, 28);
+  lv_obj_align(time_row, LV_ALIGN_CENTER, 0, 1);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(time_row, 8, 0);
@@ -667,7 +671,7 @@ void lv_create_main_gui(void) {
   lv_label_set_text(label_lunar, "");
   lv_obj_add_style(label_lunar, &style_lunar, 0);
   lv_obj_set_style_text_color(label_lunar, LUNAR_COLOR, 0);
-  lv_obj_align(label_lunar, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_align(label_lunar, LV_ALIGN_BOTTOM_MID, 0, -31);
 
   create_brightness_panel();
   bl_set_pct(bl_pct);   // syncs the label with the restored value
