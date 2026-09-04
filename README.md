@@ -51,7 +51,7 @@ NTP로 시간을 동기화하고, 좌우 스와이프로 **디지털(7세그먼�
 ## 주요 기능
 
 ### 시간 관리 (SNTP)
-- ESP32 시스템 클럭을 SNTP로 디시플린. 30분마다 재동기화
+- ESP32 시스템 클럭을 SNTP로 디시플린. 1시간마다 재동기화
 - `SNTP_SYNC_MODE_SMOOTH` — 시간이 점프하지 않고 서서히 보정됨
 - NTP 서버: `kr.pool.ntp.org` → `pool.ntp.org` → `time.google.com`
 - 타임존: `KST-9` (서울, DST 없음). `TZ_INFO`로 변경 가능
@@ -156,7 +156,7 @@ Arduino IDE 기준:
 | 매크로 | 기본값 | 설명 |
 |---|---|---|
 | `TZ_INFO` | `"KST-9"` | POSIX 타임존 문자열 |
-| `NTP_SYNC_INTERVAL_MS` | 30분 | SNTP 재동기화 주기 |
+| `NTP_SYNC_INTERVAL_MS` | 1시간 | SNTP 재동기화 주기 |
 | `BL_MIN_PCT` | 5 | 밝기 하한(%) |
 | `BL_DEFAULT` | 80 | 최초 부팅 시 밝기(%) |
 | `BL_PANEL_TIMEOUT_MS` | 4000 | 슬라이더 자동 숨김 시간 |
