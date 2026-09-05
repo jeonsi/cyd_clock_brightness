@@ -32,6 +32,7 @@
 static uint16_t cts_conn            = BLE_HS_CONN_HANDLE_NONE;
 static bool     cts_read_pending    = false;
 static bool     cts_synced_once     = false;
+static uint32_t cts_sync_count      = 0;     // 성공한 동기화 횟수 (듀티사이클용)
 static uint32_t cts_last_attempt_ms = 0;
 static bool     ancs_attempted      = false;    // 이 연결에서 ANCS 구독을 시도했는가
 
@@ -71,6 +72,7 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
         tv.tv_usec = (len >= 9) ? (suseconds_t)((uint32_t)buf[8] * 1000000UL / 256UL) : 0;
         settimeofday(&tv, NULL);
         cts_synced_once = true;
+        cts_sync_count++;
         Serial.printf("BLE CTS sync: %04d-%02d-%02d %02d:%02d:%02d\n",
                       buf[0] | (buf[1] << 8), buf[2], buf[3], buf[4], buf[5], buf[6]);
       }
@@ -277,6 +279,17 @@ static void ble_time_begin(void) {
 
 static inline bool ble_time_connected(void) {
   return cts_conn != BLE_HS_CONN_HANDLE_NONE;
+}
+
+// 스택을 내리고 라디오를 끈다. 본딩 키는 NVS에 있어 그대로 남고,
+// deinit(true)가 서버/광고 객체까지 지워 주므로 다음 ble_time_begin()이
+// 처음처럼 다시 만들 수 있다.
+static void ble_time_end(void) {
+  cts_conn = BLE_HS_CONN_HANDLE_NONE;
+  cts_read_pending = false;
+  ancs_attempted = false;
+  NimBLEDevice::deinit(true);
+  Serial.println("BLE: stack stopped");
 }
 
 // timer_cb(100ms)에서 호출: 첫 동기화 전에는 10초마다, 그 뒤에는

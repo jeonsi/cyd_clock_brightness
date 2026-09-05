@@ -312,6 +312,9 @@ static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
 static lv_obj_t * bell_box[2][ALARM_COUNT]; // per-alarm bell icons: [0] digital, [1] analog
 static lv_obj_t * link_icon[2];       // time-source (BLE/Wi-Fi) status, digital/analog
 static bool time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applied at boot
+static bool     ble_radio_on = false;               // duty cycle: radio currently up
+static uint32_t ble_window_t0 = 0;                  // when the current radio window opened
+static uint32_t last_sync_ok_ms = 0;                // last successful sync (BLE or NTP); 0 = none
 static lv_obj_t * lbl_tsrc;           // BLE/WIFI toggle label on the panel
 // alarm_t itself is declared in clock_config.h: the Arduino IDE inserts
 // auto-generated function prototypes right after the #includes, and a
@@ -373,6 +376,7 @@ void time_sync_notification_cb(struct timeval * tv) {
   struct tm t;
   time_t now = time(nullptr);
   localtime_r(&now, &t);
+  last_sync_ok_ms = millis();
   char buf[32];
   strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
   Serial.printf("NTP sync: %s\n", buf);
@@ -1289,7 +1293,7 @@ static void timer_cb(lv_timer_t * timer) {
   localtime_r(&now, &t);
 
   sw_tm_tick();
-  ble_time_tick();   // BLE CTS periodic resync (no-op in Wi-Fi builds)
+  if (time_sync_ble) ble_duty_poll();   // BLE radio windows + CTS resync
   link_icon_refresh();
 
   if (t.tm_sec != last_sec) {
@@ -1501,15 +1505,26 @@ static void make_link_icon(lv_obj_t * face, int which) {
 
 static void link_icon_refresh(void) {
   static int last_state = -1;
-  int up = time_sync_ble ? (ble_time_connected() ? 1 : 0)
-                         : ((WiFi.status() == WL_CONNECTED) ? 1 : 0);
-  if (up == last_state) return;
-  last_state = up;
+  // 2 = stale (nothing synced for SYNC_STALE_MS: the shown time free-runs),
+  // 1 = healthy (BLE: connected, or radio deliberately off between windows),
+  // 0 = waiting (window open but no phone / Wi-Fi down)
+  int state;
+  if (millis() - last_sync_ok_ms > (uint32_t)SYNC_STALE_MS) {
+    state = 2;
+  } else if (time_sync_ble) {
+    state = (!ble_radio_on || ble_time_connected()) ? 1 : 0;
+  } else {
+    state = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
+  }
+  if (state == last_state) return;
+  last_state = state;
+  lv_color_t c = (state == 2) ? lv_color_hex(0xE60000)
+               : (state == 1) ? lv_color_hex(0x33CC66)
+                              : lv_color_hex(0x888888);
   for (int i = 0; i < 2; i++) {
     if (!link_icon[i]) continue;
-    lv_obj_set_style_text_color(link_icon[i],
-        up ? lv_color_hex(0x33CC66) : lv_color_hex(0x888888), 0);
-    lv_obj_set_style_text_opa(link_icon[i], up ? LV_OPA_COVER : LV_OPA_50, 0);
+    lv_obj_set_style_text_color(link_icon[i], c, 0);
+    lv_obj_set_style_text_opa(link_icon[i], state == 0 ? LV_OPA_50 : LV_OPA_COVER, 0);
   }
 }
 
@@ -1519,6 +1534,58 @@ static void bells_refresh(void) {
       lv_obj_t * box = bell_box[f][i];
       if (!box) continue;
       bool on = alarms[i].enabled;
+// ---- BLE duty cycle --------------------------------------------------------
+// With BLE_DUTY_CYCLE the radio runs only around each resync: once a sync has
+// landed the stack is stopped (bonds live in NVS and survive) and one
+// NTP_SYNC_INTERVAL_MS later it is restarted - the bonded iPhone sees the
+// advertising and reconnects on its own. The window stays open BLE_LINGER_MS
+// past the sync so the very first pairing can finish the ANCS ("알림 공유")
+// step, and a window that never syncs (phone away) closes after
+// BLE_SYNC_TIMEOUT_MS - except during boot, when there is no valid time yet.
+static void ble_duty_poll(void) {
+#if BLE_DUTY_CYCLE
+  static uint32_t last_count = 0;   // cts_sync_count already credited
+  static uint32_t synced_ms  = 0;   // when this window's sync landed (0 = not yet)
+  static uint32_t next_ms    = 0;   // radio off: when to open the next window
+  if (!ble_radio_on) {
+    if ((int32_t)(millis() - next_ms) >= 0) {
+      Serial.println("BLE: radio on for resync");
+      cts_synced_once = false;      // back to the 10 s retry cadence inside the window
+      ble_time_begin();
+      ble_radio_on  = true;
+      ble_window_t0 = millis();
+      synced_ms = 0;
+    }
+    return;
+  }
+  ble_time_tick();                  // periodic CTS read while the radio is on
+  if (cts_sync_count != last_count) {
+    last_count = cts_sync_count;
+    last_sync_ok_ms = millis();
+    if (!synced_ms) synced_ms = millis();
+  }
+  if (synced_ms && millis() - synced_ms >= BLE_LINGER_MS) {
+    ble_time_end();
+    ble_radio_on = false;
+    next_ms = synced_ms + NTP_SYNC_INTERVAL_MS;
+    Serial.println("BLE: radio off until the next resync");
+  } else if (!synced_ms && boot_state == BOOT_DONE &&
+             millis() - ble_window_t0 >= BLE_SYNC_TIMEOUT_MS) {
+    ble_time_end();
+    ble_radio_on = false;
+    next_ms = millis() + NTP_SYNC_INTERVAL_MS;
+    Serial.println("BLE: no sync in this window, retrying next interval");
+  }
+#else
+  ble_time_tick();
+  static uint32_t seen_count = 0;
+  if (cts_sync_count != seen_count) {
+    seen_count = cts_sync_count;
+    last_sync_ok_ms = millis();
+  }
+#endif
+}
+
       lv_obj_set_style_text_opa(lv_obj_get_child(box, 0), on ? LV_OPA_COVER : LV_OPA_50, 0);
       lv_obj_t * slash = lv_obj_get_child(box, 1);
       if (on) lv_obj_add_flag(slash, LV_OBJ_FLAG_HIDDEN);
@@ -2698,6 +2765,7 @@ void setup() {
   theme_idx = prefs.getInt("theme", 0);
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
   h24 = prefs.getInt("h24", 0) != 0;
+      if (time_sync_ble) ble_duty_poll();   // timer_cb is not running yet
   screen_auto = prefs.getInt("soff", 1) != 0;
   time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE ? 1 : 0) != 0;
   for (int i = 0; i < ALARM_COUNT; i++) {
@@ -2853,3 +2921,5 @@ void loop() {
   if (boot_state != BOOT_DONE) boot_poll();
   delay(5);
 }
+    ble_radio_on  = true;
+    ble_window_t0 = millis();
