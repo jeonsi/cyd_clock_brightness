@@ -40,7 +40,7 @@
                           AND font_dseg_bold_68 (see below)
       lunar_font.h      - NanumGothic 22 px subset + DSEG 26 px with '.'
       korean_calendar.h - lunar calendar, solar terms, holiday tables
-      secrets.h         - Wi-Fi credentials (copy secrets.h.example)
+      secrets.h         - optional Wi-Fi fallback (normally set on-screen)
       clock_config.h    - all tunables (timezone, colors, themes, touch
                           calibration, sounds, ...) with per-item notes
 
@@ -77,13 +77,20 @@
 #include "lunar_font.h"
 #include "korean_calendar.h"
 #include "clock_config.h"   // every tunable, with notes on what each does
-#include "ble_time.h"       // BLE CTS time sync (all no-ops unless TIME_SYNC_BLE)
+#include "ble_time.h"       // BLE CTS time sync (used when the time source is BLE)
 
-// Wi-Fi credentials live in secrets.h (gitignored).
-// Copy secrets.h.example to secrets.h and fill in your own.
+// Wi-Fi credentials: normally picked on the device itself (scan + on-screen
+// keyboard, stored in NVS). secrets.h is an optional fallback used only when
+// nothing is stored yet - the project builds fine without the file.
+#if __has_include("secrets.h")
 #include "secrets.h"
-const char* ssid = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
+#endif
+#ifndef WIFI_SSID
+#define WIFI_SSID     ""
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD ""
+#endif
 
 // Panel size in its native, unrotated orientation
 #define SCREEN_WIDTH  240
@@ -303,6 +310,8 @@ static lv_obj_t * label_al_ampm;
 static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
 static lv_obj_t * bell_box[2][ALARM_COUNT]; // per-alarm bell icons: [0] digital, [1] analog
 static lv_obj_t * link_icon[2];       // time-source (BLE/Wi-Fi) status, digital/analog
+static bool time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applied at boot
+static lv_obj_t * lbl_tsrc;           // BLE/WIFI toggle label on the panel
 // alarm_t itself is declared in clock_config.h: the Arduino IDE inserts
 // auto-generated function prototypes right after the #includes, and a
 // prototype taking alarm_t* needs the type to exist by then.
@@ -330,7 +339,7 @@ static int      face_mode = 0;        // 0 = digital, 1 = analog (kept in NVS)
 static int      theme_idx = 0;        // index into THEMES (kept in NVS)
 static lv_obj_t * theme_btns[THEME_COUNT];
 
-enum boot_state_t { BOOT_WIFI, BOOT_NTP, BOOT_DONE };
+enum boot_state_t { BOOT_WIFI, BOOT_WIFI_SETUP, BOOT_NTP, BOOT_DONE };
 static boot_state_t boot_state = BOOT_WIFI;
 static lv_obj_t *   boot_label;
 static uint32_t     boot_t0;
@@ -1484,22 +1493,15 @@ static void make_bell_row(lv_obj_t * face, int which) {
 static void make_link_icon(lv_obj_t * face, int which) {
   lv_obj_t * l = lv_label_create(face);
   lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-#if TIME_SYNC_BLE
-  lv_label_set_text(l, LV_SYMBOL_BLUETOOTH);
-#else
-  lv_label_set_text(l, LV_SYMBOL_WIFI);
-#endif
+  lv_label_set_text(l, time_sync_ble ? LV_SYMBOL_BLUETOOTH : LV_SYMBOL_WIFI);
   lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, 12, -12);
   link_icon[which] = l;
 }
 
 static void link_icon_refresh(void) {
   static int last_state = -1;
-#if TIME_SYNC_BLE
-  int up = ble_time_connected() ? 1 : 0;
-#else
-  int up = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
-#endif
+  int up = time_sync_ble ? (ble_time_connected() ? 1 : 0)
+                         : ((WiFi.status() == WL_CONNECTED) ? 1 : 0);
   if (up == last_state) return;
   last_state = up;
   for (int i = 0; i < 2; i++) {
@@ -1679,6 +1681,19 @@ static void h24_btn_cb(lv_event_t * e) {
   bl_last_touch_ms = millis();
 }
 
+// ---- Time-source toggle (BLE CTS <-> Wi-Fi SNTP) ---------------------------
+// The radio stacks are initialized once at boot, so switching saves the
+// choice to NVS and restarts - the clock is back in a few seconds.
+static void tsrc_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  time_sync_ble = !time_sync_ble;
+  prefs.putInt("tsrc", time_sync_ble ? 1 : 0);
+  lv_label_set_text(lbl_tsrc, "...");
+  Serial.printf("Time source -> %s, restarting\n", time_sync_ble ? "BLE" : "WIFI");
+  delay(200);
+  ESP.restart();
+}
+
 // ---- Screen-timeout toggle on the brightness panel -------------------------
 // Shows the timeout it will apply ("30s" / "5m") when auto-off is armed, or
 // "ON" when the screen is set to stay on.
@@ -1741,9 +1756,10 @@ static void create_brightness_panel(void) {
   // Neither bundled Korean subset covers generic UI text (weekdays and
   // calendar names only), so this label stays numeric.
   bl_pct_label = lv_label_create(bl_panel);
-  lv_obj_set_style_text_font(bl_pct_label, &lv_font_montserrat_20, 0);
+  // 14 px: the top row now holds three buttons, the label gets what is left
+  lv_obj_set_style_text_font(bl_pct_label, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(bl_pct_label, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(bl_pct_label, LV_ALIGN_TOP_LEFT, 0, -2);
+  lv_obj_align(bl_pct_label, LV_ALIGN_TOP_LEFT, 0, 2);
 
   // 12/24-hour toggle, top-right (the swatch rows start below it)
   lv_obj_t * hb = make_button(bl_panel, h24 ? "24H" : "12H", h24_btn_cb, NULL, 64, 26);
@@ -1753,10 +1769,17 @@ static void create_brightness_panel(void) {
 #if SCREEN_OFF_MS > 0
   // Screen timeout toggle (auto-off after SCREEN_OFF_MS / always on), left of it
   lv_obj_t * sb = make_button(bl_panel, "", screen_btn_cb, NULL, 76, 26);
-  lv_obj_align(sb, LV_ALIGN_TOP_RIGHT, -70, -4);
+  lv_obj_align(sb, LV_ALIGN_TOP_RIGHT, -68, -4);
   lbl_screen = lv_obj_get_child(sb, 0);
   screen_btn_refresh();
 #endif
+
+  // Time-source toggle (saves to NVS and restarts to apply)
+  lv_obj_t * tb = make_button(bl_panel, time_sync_ble ? "BLE" : "WIFI",
+                              tsrc_btn_cb, NULL, 52, 26);
+  lv_obj_align(tb, LV_ALIGN_TOP_RIGHT, -148, -4);
+  lbl_tsrc = lv_obj_get_child(tb, 0);
+  lv_obj_set_style_text_font(lbl_tsrc, &lv_font_montserrat_14, 0);
 
   // Background color swatches in two full-width rows below the % label
   // (light row, then dark row - mirroring the THEMES order); the current
@@ -2417,7 +2440,174 @@ void lv_create_main_gui(void) {
 // NTP sync happen in the background so a dead router can never leave the
 // panel black with no explanation. Wi-Fi retries forever (a clock has
 // nothing better to do), visibly counting attempts.
-#if !TIME_SYNC_BLE
+// ---- Wi-Fi provisioning (scan + on-screen keyboard) ------------------------
+// Networks are scanned and picked on the device itself; the password is typed
+// with an LVGL keyboard and both are stored in NVS ("wssid"/"wpass"). The
+// setup screen opens automatically when nothing is stored, and can be opened
+// with the "Wi-Fi setup" button on the boot screen while connecting.
+static String     wifi_ssid, wifi_pass;
+static lv_obj_t * ws_root;              // full-screen setup container
+static lv_obj_t * ws_list;              // scan result list
+static lv_obj_t * ws_title;
+static lv_obj_t * ws_ta;                // password textarea
+static lv_obj_t * ws_kb;                // on-screen keyboard
+static lv_obj_t * boot_wifi_btn;        // "Wi-Fi setup" on the boot screen
+static char       ws_sel_ssid[33];
+static bool       ws_scanning = false;
+
+static void wifi_creds_load(void) {
+  wifi_ssid = prefs.getString("wssid", WIFI_SSID);
+  wifi_pass = prefs.getString("wpass", WIFI_PASSWORD);
+}
+
+static void wifi_connect_begin(void) {
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
+  boot_t0 = wifi_attempt_ms = millis();
+  wifi_attempts = 0;
+}
+
+static void ws_start_scan(void) {
+  lv_obj_clean(ws_list);
+  lv_list_add_text(ws_list, "Scanning...");
+  WiFi.scanDelete();
+  WiFi.scanNetworks(true /*async*/);
+  ws_scanning = true;
+}
+
+static void ws_close_and_connect(const char * ssid_txt, const char * pass_txt) {
+  prefs.putString("wssid", ssid_txt);
+  prefs.putString("wpass", pass_txt);
+  wifi_ssid = ssid_txt;
+  wifi_pass = pass_txt;
+  lv_obj_delete(ws_root);
+  ws_root = ws_list = ws_title = ws_ta = ws_kb = NULL;
+  lv_obj_remove_flag(boot_label, LV_OBJ_FLAG_HIDDEN);
+  if (boot_wifi_btn) lv_obj_remove_flag(boot_wifi_btn, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
+  wifi_connect_begin();
+  boot_state = BOOT_WIFI;
+}
+
+static void ws_back_to_list(void) {
+  if (ws_kb) { lv_obj_delete(ws_kb); ws_kb = NULL; }
+  if (ws_ta) { lv_obj_delete(ws_ta); ws_ta = NULL; }
+  lv_label_set_text(ws_title, "Select Wi-Fi network");
+  lv_obj_remove_flag(ws_list, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void ws_kb_cb(lv_event_t * e) {
+  lv_event_code_t code = lv_event_get_code(e);
+  if (code == LV_EVENT_READY)       // checkmark: connect with the typed password
+    ws_close_and_connect(ws_sel_ssid, lv_textarea_get_text(ws_ta));
+  else if (code == LV_EVENT_CANCEL) // keyboard close: back to the network list
+    ws_back_to_list();
+}
+
+static void ws_show_password(void) {
+  lv_obj_add_flag(ws_list, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(ws_title, ws_sel_ssid);
+
+  ws_ta = lv_textarea_create(ws_root);
+  lv_textarea_set_one_line(ws_ta, true);
+  lv_textarea_set_placeholder_text(ws_ta, "Password");
+  lv_obj_set_size(ws_ta, 296, 36);
+  lv_obj_align(ws_ta, LV_ALIGN_TOP_MID, 0, 30);
+
+  ws_kb = lv_keyboard_create(ws_root);
+  lv_keyboard_set_textarea(ws_kb, ws_ta);
+  lv_obj_set_size(ws_kb, 320, 150);
+  lv_obj_align(ws_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_add_event_cb(ws_kb, ws_kb_cb, LV_EVENT_READY, NULL);
+  lv_obj_add_event_cb(ws_kb, ws_kb_cb, LV_EVENT_CANCEL, NULL);
+}
+
+static void ws_net_cb(lv_event_t * e) {
+  lv_obj_t * btn = (lv_obj_t *)lv_event_get_target(e);
+  bool open_net = (bool)(intptr_t)lv_event_get_user_data(e);
+  const char * txt = lv_list_get_button_text(ws_list, btn);
+  strlcpy(ws_sel_ssid, txt, sizeof(ws_sel_ssid));
+  if (open_net) ws_close_and_connect(ws_sel_ssid, "");
+  else          ws_show_password();
+}
+
+static void ws_rescan_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  if (ws_list && !lv_obj_has_flag(ws_list, LV_OBJ_FLAG_HIDDEN) && !ws_scanning)
+    ws_start_scan();
+}
+
+// Called from boot_poll while the setup screen is up: collect scan results
+static void ws_poll(void) {
+  if (!ws_scanning) return;
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_RUNNING) return;
+  ws_scanning = false;
+  lv_obj_clean(ws_list);
+  if (n <= 0) {
+    lv_list_add_text(ws_list, "No networks found - Rescan");
+    return;
+  }
+  // Strongest first, one row per SSID (APs repeat across channels)
+  bool used[64] = {};
+  if (n > 64) n = 64;
+  for (int row = 0; row < n && row < 12; row++) {
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+      if (used[i] || WiFi.SSID(i).length() == 0) continue;
+      bool dup = false;
+      for (int j = 0; j < n; j++)
+        if (used[j] && WiFi.SSID(j) == WiFi.SSID(i)) { dup = true; break; }
+      if (dup) { used[i] = true; continue; }
+      if (best < 0 || WiFi.RSSI(i) > WiFi.RSSI(best)) best = i;
+    }
+    if (best < 0) break;
+    used[best] = true;
+    bool open_net = (WiFi.encryptionType(best) == WIFI_AUTH_OPEN);
+    lv_obj_t * b = lv_list_add_button(ws_list, LV_SYMBOL_WIFI, WiFi.SSID(best).c_str());
+    lv_obj_add_event_cb(b, ws_net_cb, LV_EVENT_CLICKED, (void *)(intptr_t)open_net);
+  }
+  WiFi.scanDelete();
+}
+
+static void wifi_setup_open(void) {
+  if (ws_root) return;
+  lv_obj_add_flag(boot_label, LV_OBJ_FLAG_HIDDEN);
+  if (boot_wifi_btn) lv_obj_add_flag(boot_wifi_btn, LV_OBJ_FLAG_HIDDEN);
+  WiFi.disconnect();          // a join attempt in progress breaks scanning
+
+  ws_root = lv_obj_create(lv_screen_active());
+  lv_obj_remove_flag(ws_root, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_size(ws_root, lv_pct(100), lv_pct(100));
+  lv_obj_set_style_bg_color(ws_root, lv_color_hex(0x181818), 0);
+  lv_obj_set_style_bg_opa(ws_root, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(ws_root, 0, 0);
+  lv_obj_set_style_radius(ws_root, 0, 0);
+  lv_obj_set_style_pad_all(ws_root, 8, 0);
+
+  ws_title = lv_label_create(ws_root);
+  lv_obj_set_style_text_font(ws_title, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_color(ws_title, lv_color_hex(0xFFFFFF), 0);
+  lv_label_set_text(ws_title, "Select Wi-Fi network");
+  lv_obj_align(ws_title, LV_ALIGN_TOP_LEFT, 0, 4);
+
+  lv_obj_t * rb = make_button(ws_root, LV_SYMBOL_REFRESH, ws_rescan_cb, NULL, 44, 28);
+  lv_obj_align(rb, LV_ALIGN_TOP_RIGHT, 0, -2);
+
+  ws_list = lv_list_create(ws_root);
+  lv_obj_set_size(ws_list, 304, 186);
+  lv_obj_align(ws_list, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+  ws_start_scan();
+  boot_state = BOOT_WIFI_SETUP;
+}
+
+static void ws_open_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  wifi_setup_open();
+}
+
 static void sntp_begin(void) {
   sntp_set_time_sync_notification_cb(time_sync_notification_cb);
   sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);   // slew the clock instead of jumping
@@ -2425,7 +2615,6 @@ static void sntp_begin(void) {
   sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
   sntp_restart();                              // apply the new interval
 }
-#endif
 
 static void boot_poll(void) {
   static uint32_t last_ui_ms = 0;
@@ -2434,10 +2623,10 @@ static void boot_poll(void) {
   switch (boot_state) {
 
     case BOOT_WIFI:
-#if !TIME_SYNC_BLE
       if (WiFi.status() == WL_CONNECTED) {
         Serial.print("Connected to Wi-Fi network with IP Address: ");
         Serial.println(WiFi.localIP());
+        if (boot_wifi_btn) { lv_obj_delete(boot_wifi_btn); boot_wifi_btn = NULL; }
         sntp_begin();
         boot_t0 = millis();
         lv_label_set_text(boot_label, "Waiting for time sync...");
@@ -2449,7 +2638,7 @@ static void boot_poll(void) {
         wifi_attempts++;
         Serial.printf("Wi-Fi retry #%d\n", wifi_attempts);
         WiFi.disconnect();
-        WiFi.begin(ssid, password);
+        WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
       }
       if (millis() - last_ui_ms > 1000) {
         last_ui_ms = millis();
@@ -2457,7 +2646,10 @@ static void boot_poll(void) {
                  (unsigned long)((millis() - boot_t0) / 1000), wifi_attempts);
         lv_label_set_text(boot_label, buf);
       }
-#endif
+      break;
+
+    case BOOT_WIFI_SETUP:
+      ws_poll();
       break;
 
     case BOOT_NTP: {
@@ -2471,15 +2663,14 @@ static void boot_poll(void) {
       }
       if (millis() - last_ui_ms > 1000) {
         last_ui_ms = millis();
-#if TIME_SYNC_BLE
-        snprintf(buf, sizeof(buf),
-                 "Waiting for BLE time sync... %lus\n"
-                 "iPhone: Settings > Bluetooth > '" BLE_DEVICE_NAME "'",
-                 (unsigned long)((millis() - boot_t0) / 1000));
-#else
-        snprintf(buf, sizeof(buf), "Waiting for time sync... %lus",
-                 (unsigned long)((millis() - boot_t0) / 1000));
-#endif
+        if (time_sync_ble)
+          snprintf(buf, sizeof(buf),
+                   "Waiting for BLE time sync... %lus\n"
+                   "iPhone: Settings > Bluetooth > '" BLE_DEVICE_NAME "'",
+                   (unsigned long)((millis() - boot_t0) / 1000));
+        else
+          snprintf(buf, sizeof(buf), "Waiting for time sync... %lus",
+                   (unsigned long)((millis() - boot_t0) / 1000));
         lv_label_set_text(boot_label, buf);
       }
       break;
@@ -2505,6 +2696,7 @@ void setup() {
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
   h24 = prefs.getInt("h24", 0) != 0;
   screen_auto = prefs.getInt("soff", 1) != 0;
+  time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE ? 1 : 0) != 0;
   for (int i = 0; i < ALARM_COUNT; i++) {
     char k[8];
     alarm_t * a = &alarms[i];
@@ -2625,19 +2817,25 @@ void setup() {
   lv_obj_set_style_text_align(boot_label, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(boot_label);
 
-#if TIME_SYNC_BLE
-  // No Wi-Fi at all: the iPhone's Current Time Service is the time source.
-  lv_label_set_text(boot_label, "Starting BLE...");
-  ble_time_begin();
-  boot_state = BOOT_NTP;     // boot_poll waits for the first CTS sync
-  boot_t0 = millis();
-#else
-  lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(ssid, password);
-  boot_t0 = wifi_attempt_ms = millis();
-#endif
+  if (time_sync_ble) {
+    // No Wi-Fi: the iPhone's Current Time Service is the time source.
+    lv_label_set_text(boot_label, "Starting BLE...");
+    ble_time_begin();
+    boot_state = BOOT_NTP;   // boot_poll waits for the first CTS sync
+    boot_t0 = millis();
+  } else {
+    wifi_creds_load();
+    // "Wi-Fi setup" stays available while connecting, for changing networks
+    boot_wifi_btn = make_button(lv_screen_active(), LV_SYMBOL_WIFI " Setup",
+                                ws_open_cb, NULL, 130, 34);
+    lv_obj_align(boot_wifi_btn, LV_ALIGN_BOTTOM_MID, 0, -14);
+    if (wifi_ssid.length() == 0) {
+      wifi_setup_open();       // nothing stored anywhere: straight to setup
+    } else {
+      lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
+      wifi_connect_begin();
+    }
+  }
 }
 
 void loop() {

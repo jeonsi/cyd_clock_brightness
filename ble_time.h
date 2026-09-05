@@ -1,5 +1,6 @@
 /*
- * ble_time.h - BLE CTS(Current Time Service) 시간 동기화 (TIME_SYNC_BLE 1일 때만 컴파일)
+ * ble_time.h - BLE CTS(Current Time Service) 시간 동기화
+ * (항상 컴파일되고, 시간 소스가 BLE로 선택된 부팅에서만 ble_time_begin()이 불린다)
  *
  * 구조: ESP32가 BLE 페리페럴로 광고한다. 광고에는 CTS(0x1805) 솔리시테이션과
  * ANCS 솔리시테이션을 함께 싣는데, 아이폰은 ANCS를 찾는 액세서리만 설정 >
@@ -23,8 +24,6 @@
 
 #include <Arduino.h>
 #include "clock_config.h"
-
-#if TIME_SYNC_BLE
 
 #include <NimBLEDevice.h>
 #include <sys/time.h>
@@ -288,11 +287,4 @@ static void ble_time_tick(void) {
   if (millis() - cts_last_attempt_ms >= due) cts_request_read();
 }
 
-#else  /* !TIME_SYNC_BLE: Wi-Fi 빌드에서는 전부 no-op */
-
-static inline void ble_time_begin(void) {}
-static inline void ble_time_tick(void) {}
-static inline bool ble_time_connected(void) { return false; }
-
-#endif /* TIME_SYNC_BLE */
 #endif /* BLE_TIME_H */
