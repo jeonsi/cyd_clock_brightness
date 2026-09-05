@@ -70,6 +70,7 @@
 #include <Preferences.h>
 
 #include <WiFi.h>
+#include <esp_bt.h>         // esp_bt_controller_mem_release (Wi-Fi boots)
 #include "time.h"
 #include "esp_sntp.h"
 
@@ -2627,6 +2628,7 @@ static void boot_poll(void) {
         Serial.print("Connected to Wi-Fi network with IP Address: ");
         Serial.println(WiFi.localIP());
         if (boot_wifi_btn) { lv_obj_delete(boot_wifi_btn); boot_wifi_btn = NULL; }
+        Serial.printf("free heap after Wi-Fi connect: %u\n", (unsigned)ESP.getFreeHeap());
         sntp_begin();
         boot_t0 = millis();
         lv_label_set_text(boot_label, "Waiting for time sync...");
@@ -2658,6 +2660,7 @@ static void boot_poll(void) {
         lv_obj_delete(boot_label);
         boot_label = NULL;
         lv_create_main_gui();
+        Serial.printf("free heap after GUI: %u\n", (unsigned)ESP.getFreeHeap());
         boot_state = BOOT_DONE;
         break;
       }
@@ -2824,6 +2827,13 @@ void setup() {
     boot_state = BOOT_NTP;   // boot_poll waits for the first CTS sync
     boot_t0 = millis();
   } else {
+    // The linked-in BT controller statically reserves ~60 KB of DRAM even
+    // when unused. On a Wi-Fi boot BLE stays off until the next reboot
+    // (mode switching reboots anyway), so hand that memory back to the
+    // heap - without it the Wi-Fi stack plus the GUI run out of memory
+    // (LVGL "circ_calc_aa4 ... Out of memory" while building the faces).
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+    Serial.printf("free heap after BT release: %u\n", (unsigned)ESP.getFreeHeap());
     wifi_creds_load();
     // "Wi-Fi setup" stays available while connecting, for changing networks
     boot_wifi_btn = make_button(lv_screen_active(), LV_SYMBOL_WIFI " Setup",
