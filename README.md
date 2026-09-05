@@ -51,14 +51,14 @@ NTP(또는 아이폰과의 BLE CTS 페어링)로 시간을 동기화하고, 좌�
 ## 주요 기능
 
 ### 시간 관리 (SNTP / BLE CTS)
-빌드 시 `clock_config.h`의 `TIME_SYNC_BLE`로 두 방식 중 하나를 선택합니다.
+빌드 시 `clock_config.h`의 `TIME_SYNC_BLE`로 두 방식 중 하나를 선택합니다(기본: BLE CTS).
 
-**Wi-Fi + SNTP** (`TIME_SYNC_BLE 0`, 기본)
+**Wi-Fi + SNTP** (`TIME_SYNC_BLE 0` — 안드로이드 사용자이거나 아이폰이 없을 때)
 - ESP32 시스템 클럭을 SNTP로 디시플린. 1시간마다 재동기화
 - `SNTP_SYNC_MODE_SMOOTH` — 시간이 점프하지 않고 서서히 보정됨
 - NTP 서버: `kr.pool.ntp.org` → `pool.ntp.org` → `time.google.com`
 
-**BLE CTS** (`TIME_SYNC_BLE 1`, Wi-Fi 미사용 · **아이폰 전용** · NimBLE-Arduino 2.x 필요 — 안드로이드는 OS가 CTS/ANCS를 제공하지 않아 동작하지 않음, Wi-Fi 빌드 사용)
+**BLE CTS** (`TIME_SYNC_BLE 1`, 기본 · Wi-Fi 미사용 · **아이폰 전용** · NimBLE-Arduino 2.x 필요 — 안드로이드는 OS가 CTS/ANCS를 제공하지 않아 동작하지 않음, Wi-Fi 빌드 사용)
 - ESP32가 CTS(0x1805) 솔리시테이션을 실어 광고 → **아이폰 설정 > Bluetooth 목록에서 `CYD Clock`(=`BLE_DEVICE_NAME`)을 눌러 최초 1회 페어링** → 같은 연결에서 ESP32가 GATT 클라이언트로 아이폰의 Current Time 특성(0x2A2B)을 읽어 시스템 클럭을 맞춤
 - 첫 동기화 전에는 10초마다, 그 뒤에는 `NTP_SYNC_INTERVAL_MS`마다 재동기화(폰이 연결된 동안만). 연결이 끊기면 다시 광고하고 페어링된 폰이 근처에 오면 재연결
 - **자동 재연결**: iOS는 "본딩 + 광고"만으로는 먼저 연결을 걸어 주지 않으므로, 페어링 후 아이폰의 **ANCS 알림 특성을 구독**해 시스템이 재연결을 관리하는 알림 액세서리로 등록됨(스마트워치 방식). 최초 1회 아이폰에 "알림 공유" 허용 요청이 뜨며 **허용해야 자동 재연결이 동작**(알림 데이터는 사용하지 않고 버림). 기기가 iOS 설정 > Bluetooth 목록에 직접 뜨지 않는 경우 최초 페어링은 LightBlue·nRF Connect 같은 앱에서 연결해 진행
@@ -109,10 +109,10 @@ Arduino IDE 기준:
 1. **라이브러리 설치** (Library Manager)
    - `lvgl` (v9)
    - `TFT_eSPI` — CYD용 `User_Setup.h` 설정 필요 ([RNT 가이드](https://RandomNerdTutorials.com/esp32-cyd-lvgl-digital-clock/) 참고)
-   - `NimBLE-Arduino` (2.x) — **BLE 시간 동기화(`TIME_SYNC_BLE 1`)를 쓸 때만** 필요. 빌드가 앱 파티션을 넘치면 Tools > Partition Scheme을 "Huge APP (3MB No OTA)"로
+   - `NimBLE-Arduino` (2.x) — 기본 빌드(BLE 시간 동기화, `TIME_SYNC_BLE 1`)에 필요. Wi-Fi 방식(`TIME_SYNC_BLE 0`)으로 빌드하면 불필요. 빌드가 앱 파티션을 넘치면 Tools > Partition Scheme을 "Huge APP (3MB No OTA)"로
    - (터치 라이브러리는 불필요 — XPT2046을 SPI로 직접 구동)
 2. **lv_conf.h** 에서 `LV_FONT_MONTSERRAT_20`(밝기 %·버튼 심볼·다이얼 숫자·달력)과 `LV_FONT_MONTSERRAT_14`(알람 종 아이콘) 활성화
-3. `secrets.h.example`을 `secrets.h`로 복사하고 **Wi-Fi SSID/비밀번호**를 입력 (`secrets.h`는 gitignore되어 커밋되지 않음. BLE 모드에서는 사용되지 않지만 파일은 있어야 컴파일됨)
+3. `secrets.h.example`을 `secrets.h`로 복사 (`secrets.h`는 gitignore되어 커밋되지 않음). Wi-Fi 방식(`TIME_SYNC_BLE 0`)일 때만 **SSID/비밀번호**를 실제 값으로 입력하면 되고, 기본 BLE 빌드에서는 내용과 무관하게 파일만 있으면 됨
 4. 필요 시 `clock_config.h`에서 `TZ_INFO`(타임존) 등 설정 수정 (항목별 한국어 설명 포함)
 5. 파일을 UTF-8로 저장(Arduino IDE 기본값) 후 업로드
 
@@ -179,7 +179,7 @@ Arduino IDE 기준:
 | `LDR_RAW_BRIGHT/DARK` | 40/1200 | 조도 센서 ADC 보정값(이 보드 실측: 실내 조명 0, 완전 암실 ~1750). 밤에 너무 밝으면 DARK를 내리고, 너무 일찍 어두워지면 올림. `LDR_DEBUG 1`로 raw 확인 |
 | `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
-| `TIME_SYNC_BLE` | 0 | 시간 동기화 방식: 0 = Wi-Fi+SNTP, 1 = BLE CTS(아이폰 페어링, NimBLE-Arduino 필요) |
+| `TIME_SYNC_BLE` | 1 | 시간 동기화 방식: 1 = BLE CTS(기본, 아이폰 페어링, NimBLE-Arduino 필요), 0 = Wi-Fi+SNTP |
 | `BLE_DEVICE_NAME` | "CYD Clock" | BLE 모드에서 아이폰 Bluetooth 목록에 표시되는 이름 |
 | `BOOT_BEEP` | 1 | 부팅 시 스피커 확인용 비프음 2회. 0으로 끔 |
 | `HOURLY_CHIME` | 1 | 매 정시 "삐삑" 2회. 0으로 끔 |
