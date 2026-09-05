@@ -33,6 +33,20 @@
 // 부팅 화면에 "try N"으로 횟수가 표시됨.
 #define WIFI_RETRY_MS   (30 * 1000)
 
+// 시간 동기화 방식. 0 = Wi-Fi + SNTP(기본), 1 = BLE CTS(아이폰의 시간을 읽어 옴,
+// Wi-Fi 미사용). BLE 방식 주의점:
+//   - NimBLE-Arduino 라이브러리 2.x 필요(Library Manager에서 "NimBLE-Arduino" 설치)
+//   - 첫 사용 시 아이폰 설정 > Bluetooth 목록에서 BLE_DEVICE_NAME을 눌러 페어링
+//   - 재동기화 주기는 NTP_SYNC_INTERVAL_MS를 그대로 사용하되, 폰이 근처에 있어
+//     연결된 동안만 동작. 폰이 없는 동안은 내부 클럭 드리프트(하루 수 초)가 누적됨
+//   - CTS는 폰의 '현지 시간'을 주므로 폰의 시간대가 TZ_INFO와 일치해야 함
+//   - 빌드가 앱 파티션을 넘치면 Arduino IDE Tools > Partition Scheme을
+//     "Huge APP (3MB No OTA)"로 변경
+#define TIME_SYNC_BLE 1
+
+// BLE 모드에서 광고하는 기기 이름(아이폰 Bluetooth 목록에 표시됨).
+#define BLE_DEVICE_NAME "CYD Clock"
+
 /* =========================================================================
  * 2. 폰트 선택
  *    번들 폰트: clock_fonts.h(DSEG Italic 68/Bold 68/30/26, DSEG14 Italic 20, 나눔고딕 26),

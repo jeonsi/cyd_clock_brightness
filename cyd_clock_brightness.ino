@@ -77,6 +77,7 @@
 #include "lunar_font.h"
 #include "korean_calendar.h"
 #include "clock_config.h"   // every tunable, with notes on what each does
+#include "ble_time.h"       // BLE CTS time sync (all no-ops unless TIME_SYNC_BLE)
 
 // Wi-Fi credentials live in secrets.h (gitignored).
 // Copy secrets.h.example to secrets.h and fill in your own.
@@ -1277,6 +1278,7 @@ static void timer_cb(lv_timer_t * timer) {
   localtime_r(&now, &t);
 
   sw_tm_tick();
+  ble_time_tick();   // BLE CTS periodic resync (no-op in Wi-Fi builds)
 
   if (t.tm_sec != last_sec) {
     last_sec = t.tm_sec;
@@ -2379,6 +2381,7 @@ void lv_create_main_gui(void) {
 // NTP sync happen in the background so a dead router can never leave the
 // panel black with no explanation. Wi-Fi retries forever (a clock has
 // nothing better to do), visibly counting attempts.
+#if !TIME_SYNC_BLE
 static void sntp_begin(void) {
   sntp_set_time_sync_notification_cb(time_sync_notification_cb);
   sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);   // slew the clock instead of jumping
@@ -2386,6 +2389,7 @@ static void sntp_begin(void) {
   sntp_set_sync_interval(NTP_SYNC_INTERVAL_MS);
   sntp_restart();                              // apply the new interval
 }
+#endif
 
 static void boot_poll(void) {
   static uint32_t last_ui_ms = 0;
@@ -2394,6 +2398,7 @@ static void boot_poll(void) {
   switch (boot_state) {
 
     case BOOT_WIFI:
+#if !TIME_SYNC_BLE
       if (WiFi.status() == WL_CONNECTED) {
         Serial.print("Connected to Wi-Fi network with IP Address: ");
         Serial.println(WiFi.localIP());
@@ -2416,6 +2421,7 @@ static void boot_poll(void) {
                  (unsigned long)((millis() - boot_t0) / 1000), wifi_attempts);
         lv_label_set_text(boot_label, buf);
       }
+#endif
       break;
 
     case BOOT_NTP: {
@@ -2429,8 +2435,15 @@ static void boot_poll(void) {
       }
       if (millis() - last_ui_ms > 1000) {
         last_ui_ms = millis();
+#if TIME_SYNC_BLE
+        snprintf(buf, sizeof(buf),
+                 "Waiting for BLE time sync... %lus\n"
+                 "iPhone: Settings > Bluetooth > '" BLE_DEVICE_NAME "'",
+                 (unsigned long)((millis() - boot_t0) / 1000));
+#else
         snprintf(buf, sizeof(buf), "Waiting for time sync... %lus",
                  (unsigned long)((millis() - boot_t0) / 1000));
+#endif
         lv_label_set_text(boot_label, buf);
       }
       break;
@@ -2573,13 +2586,22 @@ void setup() {
   boot_label = lv_label_create(lv_screen_active());
   lv_obj_set_style_text_font(boot_label, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(boot_label, lv_color_hex(THEMES[theme_idx].dial_major), 0);
-  lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
+  lv_obj_set_style_text_align(boot_label, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(boot_label);
 
+#if TIME_SYNC_BLE
+  // No Wi-Fi at all: the iPhone's Current Time Service is the time source.
+  lv_label_set_text(boot_label, "Starting BLE...");
+  ble_time_begin();
+  boot_state = BOOT_NTP;     // boot_poll waits for the first CTS sync
+  boot_t0 = millis();
+#else
+  lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid, password);
   boot_t0 = wifi_attempt_ms = millis();
+#endif
 }
 
 void loop() {
