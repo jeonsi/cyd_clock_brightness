@@ -302,6 +302,7 @@ static lv_obj_t * label_al_time;        // "07:30" in the big DSEG face
 static lv_obj_t * label_al_ampm;
 static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
 static lv_obj_t * bell_box[2][ALARM_COUNT]; // per-alarm bell icons: [0] digital, [1] analog
+static lv_obj_t * link_icon[2];       // time-source (BLE/Wi-Fi) status, digital/analog
 // alarm_t itself is declared in clock_config.h: the Arduino IDE inserts
 // auto-generated function prototypes right after the #includes, and a
 // prototype taking alarm_t* needs the type to exist by then.
@@ -1279,6 +1280,7 @@ static void timer_cb(lv_timer_t * timer) {
 
   sw_tm_tick();
   ble_time_tick();   // BLE CTS periodic resync (no-op in Wi-Fi builds)
+  link_icon_refresh();
 
   if (t.tm_sec != last_sec) {
     last_sec = t.tm_sec;
@@ -1474,6 +1476,38 @@ static void make_bell_row(lv_obj_t * face, int which) {
   lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
   lv_obj_set_style_pad_column(row, 2, 0);
   for (int i = 0; i < ALARM_COUNT; i++) bell_box[which][i] = make_bell(row);
+}
+
+// Time-source link icon in the bottom-left corner of the digital and analog
+// faces, mirroring the alarm bells on the right: Bluetooth or Wi-Fi symbol
+// depending on the build, green while the link is up, dim gray while down.
+static void make_link_icon(lv_obj_t * face, int which) {
+  lv_obj_t * l = lv_label_create(face);
+  lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+#if TIME_SYNC_BLE
+  lv_label_set_text(l, LV_SYMBOL_BLUETOOTH);
+#else
+  lv_label_set_text(l, LV_SYMBOL_WIFI);
+#endif
+  lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+  link_icon[which] = l;
+}
+
+static void link_icon_refresh(void) {
+  static int last_state = -1;
+#if TIME_SYNC_BLE
+  int up = ble_time_connected() ? 1 : 0;
+#else
+  int up = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
+#endif
+  if (up == last_state) return;
+  last_state = up;
+  for (int i = 0; i < 2; i++) {
+    if (!link_icon[i]) continue;
+    lv_obj_set_style_text_color(link_icon[i],
+        up ? lv_color_hex(0x33CC66) : lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_opa(link_icon[i], up ? LV_OPA_COVER : LV_OPA_50, 0);
+  }
 }
 
 static void bells_refresh(void) {
@@ -1879,6 +1913,7 @@ static void create_analog_face(void) {
 
   // Alarm bells in the same bottom-right spot as on the digital face
   make_bell_row(face_analog, 1);
+  make_link_icon(face_analog, 1);
   // Colors are applied by theme_apply() from lv_create_main_gui() once
   // every face exists - calling it here would leave the cards of the faces
   // created later (calendar, stopwatch, timer) at LVGL's default white.
@@ -2151,6 +2186,7 @@ void lv_create_main_gui(void) {
 
   // One bell per alarm in the plate's bottom-right corner (slashed when OFF)
   make_bell_row(face_digital, 0);
+  make_link_icon(face_digital, 0);
 
   // ---- Styles
   static lv_style_t style_time;

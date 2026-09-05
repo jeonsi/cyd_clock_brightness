@@ -276,6 +276,10 @@ static void ble_time_begin(void) {
                 BLE_DEVICE_NAME);
 }
 
+static inline bool ble_time_connected(void) {
+  return cts_conn != BLE_HS_CONN_HANDLE_NONE;
+}
+
 // timer_cb(100ms)에서 호출: 첫 동기화 전에는 10초마다, 그 뒤에는
 // NTP_SYNC_INTERVAL_MS마다 다시 읽는다(연결되어 있을 때만).
 static void ble_time_tick(void) {
@@ -288,6 +292,7 @@ static void ble_time_tick(void) {
 
 static inline void ble_time_begin(void) {}
 static inline void ble_time_tick(void) {}
+static inline bool ble_time_connected(void) { return false; }
 
 #endif /* TIME_SYNC_BLE */
 #endif /* BLE_TIME_H */
