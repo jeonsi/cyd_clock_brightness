@@ -376,10 +376,10 @@ void log_print(lv_log_level_t level, const char * buf) {
 
 void time_sync_notification_cb(struct timeval * tv) {
   LV_UNUSED(tv);
+  last_sync_ok_ms = millis();
   struct tm t;
   time_t now = time(nullptr);
   localtime_r(&now, &t);
-  last_sync_ok_ms = millis();
   char buf[32];
   strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
   Serial.printf("NTP sync: %s\n", buf);
@@ -1523,37 +1523,6 @@ static void make_link_icon(lv_obj_t * face, int which) {
   link_icon[which] = l;
 }
 
-static void link_icon_refresh(void) {
-  static int last_state = -1;
-  // 2 = stale (nothing synced for SYNC_STALE_MS: the shown time free-runs),
-  // 1 = healthy (BLE: connected, or radio deliberately off between windows),
-  // 0 = waiting (window open but no phone / Wi-Fi down)
-  int state;
-  if (millis() - last_sync_ok_ms > (uint32_t)SYNC_STALE_MS) {
-    state = 2;
-  } else if (time_sync_ble) {
-    state = (!ble_radio_on || ble_time_connected()) ? 1 : 0;
-  } else {
-    state = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
-  }
-  if (state == last_state) return;
-  last_state = state;
-  lv_color_t c = (state == 2) ? lv_color_hex(0xE60000)
-               : (state == 1) ? lv_color_hex(0x33CC66)
-                              : lv_color_hex(0x888888);
-  for (int i = 0; i < 2; i++) {
-    if (!link_icon[i]) continue;
-    lv_obj_set_style_text_color(link_icon[i], c, 0);
-    lv_obj_set_style_text_opa(link_icon[i], state == 0 ? LV_OPA_50 : LV_OPA_COVER, 0);
-  }
-}
-
-static void bells_refresh(void) {
-  for (int f = 0; f < 2; f++) {
-    for (int i = 0; i < ALARM_COUNT; i++) {
-      lv_obj_t * box = bell_box[f][i];
-      if (!box) continue;
-      bool on = alarms[i].enabled;
 // ---- BLE duty cycle --------------------------------------------------------
 // With BLE_DUTY_CYCLE the radio runs only around each resync: once a sync has
 // landed the stack is stopped (bonds live in NVS and survive) and one
@@ -1606,6 +1575,37 @@ static void ble_duty_poll(void) {
 #endif
 }
 
+static void link_icon_refresh(void) {
+  static int last_state = -1;
+  // 2 = stale (nothing synced for SYNC_STALE_MS: the shown time free-runs),
+  // 1 = healthy (BLE: connected, or radio deliberately off between windows),
+  // 0 = waiting (window open but no phone / Wi-Fi down)
+  int state;
+  if (millis() - last_sync_ok_ms > (uint32_t)SYNC_STALE_MS) {
+    state = 2;
+  } else if (time_sync_ble) {
+    state = (!ble_radio_on || ble_time_connected()) ? 1 : 0;
+  } else {
+    state = (WiFi.status() == WL_CONNECTED) ? 1 : 0;
+  }
+  if (state == last_state) return;
+  last_state = state;
+  lv_color_t c = (state == 2) ? lv_color_hex(0xE60000)
+               : (state == 1) ? lv_color_hex(0x33CC66)
+                              : lv_color_hex(0x888888);
+  for (int i = 0; i < 2; i++) {
+    if (!link_icon[i]) continue;
+    lv_obj_set_style_text_color(link_icon[i], c, 0);
+    lv_obj_set_style_text_opa(link_icon[i], state == 0 ? LV_OPA_50 : LV_OPA_COVER, 0);
+  }
+}
+
+static void bells_refresh(void) {
+  for (int f = 0; f < 2; f++) {
+    for (int i = 0; i < ALARM_COUNT; i++) {
+      lv_obj_t * box = bell_box[f][i];
+      if (!box) continue;
+      bool on = alarms[i].enabled;
       lv_obj_set_style_text_opa(lv_obj_get_child(box, 0), on ? LV_OPA_COVER : LV_OPA_50, 0);
       lv_obj_t * slash = lv_obj_get_child(box, 1);
       if (on) lv_obj_add_flag(slash, LV_OBJ_FLAG_HIDDEN);
@@ -2765,6 +2765,7 @@ static void boot_poll(void) {
       break;
 
     case BOOT_NTP: {
+      if (time_sync_ble) ble_duty_poll();   // timer_cb is not running yet
       struct tm t;
       if (getLocalTime(&t, 0)) {
         lv_obj_delete(boot_label);
@@ -2795,8 +2796,8 @@ static void boot_poll(void) {
 }
 
 void setup() {
-  Serial.begin(115200);
   setCpuFrequencyMhz(CPU_FREQ_MHZ);   // before the radios and Serial come up
+  Serial.begin(115200);
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
   Serial.println(LVGL_Arduino);
 
@@ -2809,11 +2810,10 @@ void setup() {
   theme_idx = prefs.getInt("theme", 0);
   if (theme_idx < 0 || theme_idx >= THEME_COUNT) theme_idx = 0;
   h24 = prefs.getInt("h24", 0) != 0;
-      if (time_sync_ble) ble_duty_poll();   // timer_cb is not running yet
   screen_auto = prefs.getInt("soff", 1) != 0;
   time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE ? 1 : 0) != 0;
-  for (int i = 0; i < ALARM_COUNT; i++) {
   night_enabled = prefs.getInt("night", 1) != 0;
+  for (int i = 0; i < ALARM_COUNT; i++) {
     char k[8];
     alarm_t * a = &alarms[i];
     snprintf(k, sizeof(k), "a%d_h", i);  a->hh = prefs.getInt(k, ALARM_DEFAULT_HH);
@@ -2937,6 +2937,8 @@ void setup() {
     // No Wi-Fi: the iPhone's Current Time Service is the time source.
     lv_label_set_text(boot_label, "Starting BLE...");
     ble_time_begin();
+    ble_radio_on  = true;
+    ble_window_t0 = millis();
     boot_state = BOOT_NTP;   // boot_poll waits for the first CTS sync
     boot_t0 = millis();
   } else {
@@ -2966,5 +2968,3 @@ void loop() {
   if (boot_state != BOOT_DONE) boot_poll();
   delay(5);
 }
-    ble_radio_on  = true;
-    ble_window_t0 = millis();

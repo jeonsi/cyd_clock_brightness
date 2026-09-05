@@ -183,20 +183,20 @@ Arduino IDE 기준:
 | `SHOW_GHOST_SEGMENTS` | 0 | 1로 켜면 꺼진 세그먼트를 옅게 표시 |
 | `AUTO_BL` | 1 | 0으로 끄면 조도 센서 자동 밝기 비활성화 |
 | `LDR_RAW_BRIGHT/DARK` | 40/1200 | 조도 센서 ADC 보정값(이 보드 실측: 실내 조명 0, 완전 암실 ~1750). 밤에 너무 밝으면 DARK를 내리고, 너무 일찍 어두워지면 올림. `LDR_DEBUG 1`로 raw 확인 |
-| `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `NIGHT_FROM_HOUR/TO_HOUR` | 20/7 | 야간 감광 시간대(자정 걸침 지원) |
 | `NIGHT_PCT` | 50 | 야간 시간대의 밝기(주간 대비 %). 100이면 기능 없음 |
+| `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
 | `TIME_SYNC_BLE` | 1 | 시간 동기화 방식의 최초 부팅 기본값(1 = BLE CTS, 0 = Wi-Fi+SNTP). 이후에는 밝기 패널의 BLE/WIFI 버튼으로 전환(NVS 저장, 즉시 재부팅) |
 | `BLE_DEVICE_NAME` | "CYD Clock" | BLE 모드에서 아이폰 Bluetooth 목록에 표시되는 이름 |
-| `BOOT_BEEP` | 1 | 부팅 시 스피커 확인용 비프음 2회. 0으로 끔 |
-| `HOURLY_CHIME` | 1 | 매 정시 "삐삑" 2회. 0으로 끔 |
-| `CHIME_TONE_HZ` | 2500 | 정시음 주파수 (알람과 별도) |
-| `CHIME_BEEP/GAP_MS` | 60/60 | 정시음 비프 길이와 간격 |
 | `BLE_DUTY_CYCLE` | 1 | 1이면 BLE 라디오를 동기화 무렵에만 켬(듀티사이클), 0이면 항상 켜 둠 |
 | `BLE_LINGER_MS` | 60초 | 동기화 성공 후 라디오를 더 켜 두는 시간(최초 페어링의 알림 허용 단계용) |
 | `BLE_SYNC_TIMEOUT_MS` | 3분 | 동기화 없이 열린 라디오 창을 닫기까지의 시간(다음 주기에 재시도) |
 | `SYNC_STALE_MS` | 주기×2 | 마지막 동기화 뒤 이 시간이 지나면 상태 아이콘이 빨간색(시간 무보정 경고) |
+| `BOOT_BEEP` | 1 | 부팅 시 스피커 확인용 비프음 2회. 0으로 끔 |
+| `HOURLY_CHIME` | 1 | 매 정시 "삐삑" 2회. 0으로 끔 |
+| `CHIME_TONE_HZ` | 2500 | 정시음 주파수 (알람과 별도) |
+| `CHIME_BEEP/GAP_MS` | 60/60 | 정시음 비프 길이와 간격 |
 | `CHIME_FROM/TO_HOUR` | 7/22 | 정시음이 울리는 시간대(포함 범위). 0/23이면 24시간 |
 | `ALARM_TONE_HZ` | 2000 | 알람/비프 주파수. 스피커 음량이 작으면 1000~3000에서 조정 |
 | `TIMER_ALARM_MS` / `ALARM_RING_MS` | 30초 / 30초 | 타이머 알람·기상 알람이 탭 없이 자동 종료되기까지의 시간 |
