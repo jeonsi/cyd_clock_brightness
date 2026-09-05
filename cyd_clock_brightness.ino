@@ -359,6 +359,9 @@ static int      bl_pct = BL_DEFAULT;
 static int      bl_saved_pct = -1;
 static uint32_t bl_last_touch_ms = 0;
 static int      bl_auto_factor = 100;   // % of bl_pct, driven by the LDR (100 while the panel is open)
+static int      bl_night_factor = 100;  // % cap during NIGHT_FROM..TO hours (NIGHT_PCT)
+static bool     night_enabled = true;   // night dimming on/off (panel toggle, NVS "night")
+static lv_obj_t * lbl_night;            // its button label
 static int      bl_ldr_target  = 100;   // what the LDR alone would set the factor to, for the label
 static float    ldr_ema = -1.0f;
 static bool     screen_off = false;     // backlight fully off after SCREEN_OFF_MS idle
@@ -397,7 +400,8 @@ static uint32_t bl_pct_to_duty(int pct) {
 
 static void bl_apply(void) {
   // Screen timeout: duty 0 (not the faint-glow floor) until a touch wakes it
-  uint32_t duty = screen_off ? 0 : bl_pct_to_duty(bl_pct * bl_auto_factor / 100);
+  uint32_t duty = screen_off
+      ? 0 : bl_pct_to_duty(bl_pct * bl_auto_factor / 100 * bl_night_factor / 100);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(BL_PIN, duty);
 #else
@@ -429,7 +433,7 @@ static void screen_wake(void) {
 static void bl_label_refresh(void) {
   char buf[24];
 #if AUTO_BL
-  int eff = bl_pct * bl_ldr_target / 100;
+  int eff = bl_pct * bl_ldr_target / 100 * bl_night_factor / 100;
   if (eff < BL_MIN_PCT) eff = BL_MIN_PCT;
   snprintf(buf, sizeof(buf), "%d%% " LV_SYMBOL_RIGHT " %d%%", bl_pct, eff);
 #else
@@ -1292,6 +1296,22 @@ static void timer_cb(lv_timer_t * timer) {
   struct tm t;
   localtime_r(&now, &t);
 
+  // Night dimming: cap the brightness to NIGHT_PCT% of the daytime level
+  // between NIGHT_FROM_HOUR and NIGHT_TO_HOUR (range may cross midnight)
+  if (t.tm_year > 100) {   // only with a valid (synced) clock
+    bool night = night_enabled &&
+        ((NIGHT_FROM_HOUR > NIGHT_TO_HOUR)
+            ? (t.tm_hour >= NIGHT_FROM_HOUR || t.tm_hour < NIGHT_TO_HOUR)
+            : (t.tm_hour >= NIGHT_FROM_HOUR && t.tm_hour < NIGHT_TO_HOUR));
+    int nf = night ? NIGHT_PCT : 100;
+    if (nf != bl_night_factor) {
+      bl_night_factor = nf;
+      bl_apply();
+      bl_label_refresh();
+      Serial.printf("Night dimming %s\n", night ? "on" : "off");
+    }
+  }
+
   sw_tm_tick();
   if (time_sync_ble) ble_duty_poll();   // BLE radio windows + CTS resync
   link_icon_refresh();
@@ -1762,6 +1782,22 @@ static void tsrc_btn_cb(lv_event_t * e) {
   ESP.restart();
 }
 
+// ---- Night-dimming toggle on the brightness panel ---------------------------
+static void night_btn_refresh(void) {
+  char buf[16];
+  snprintf(buf, sizeof(buf), night_enabled ? "NIGHT %d%%" : "NIGHT OFF", NIGHT_PCT);
+  lv_label_set_text(lbl_night, buf);
+}
+
+static void night_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  night_enabled = !night_enabled;
+  prefs.putInt("night", night_enabled ? 1 : 0);
+  night_btn_refresh();
+  // timer_cb picks the change up within 100 ms and re-applies the backlight
+  bl_last_touch_ms = millis();
+}
+
 // ---- Screen-timeout toggle on the brightness panel -------------------------
 // Shows the timeout it will apply ("30s" / "5m") when auto-off is armed, or
 // "ON" when the screen is set to stay on.
@@ -1806,7 +1842,7 @@ static void theme_btn_cb(lv_event_t * e) {
 // the clock without disturbing its layout.
 static void create_brightness_panel(void) {
   bl_panel = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(bl_panel, 300, 122);
+  lv_obj_set_size(bl_panel, 300, 152);
   lv_obj_align(bl_panel, LV_ALIGN_BOTTOM_MID, 0, -8);
   lv_obj_remove_flag(bl_panel, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(bl_panel, lv_color_hex(0x181818), 0);
@@ -1849,6 +1885,13 @@ static void create_brightness_panel(void) {
   lbl_tsrc = lv_obj_get_child(tb, 0);
   lv_obj_set_style_text_font(lbl_tsrc, &lv_font_montserrat_14, 0);
 
+  // Night-dimming toggle on its own row (the top row is full)
+  lv_obj_t * nb = make_button(bl_panel, "", night_btn_cb, NULL, 96, 26);
+  lv_obj_align(nb, LV_ALIGN_TOP_RIGHT, 0, 26);
+  lbl_night = lv_obj_get_child(nb, 0);
+  lv_obj_set_style_text_font(lbl_night, &lv_font_montserrat_14, 0);
+  night_btn_refresh();
+
   // Background color swatches in two full-width rows below the % label
   // (light row, then dark row - mirroring the THEMES order); the current
   // one gets an orange ring. Created after the slider so they win the hit
@@ -1861,7 +1904,7 @@ static void create_brightness_panel(void) {
     // itself past its 10 px scroll limit and drop the click.
     lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(b, 24, 24);
-    lv_obj_align(b, LV_ALIGN_TOP_LEFT, (i % 8) * 37, 26 + (i / 8) * 30);
+    lv_obj_align(b, LV_ALIGN_TOP_LEFT, (i % 8) * 37, 56 + (i / 8) * 30);
     lv_obj_set_style_radius(b, 6, 0);
     lv_obj_set_style_bg_color(b, lv_color_hex(THEMES[i].bg), 0);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
@@ -2769,6 +2812,7 @@ void setup() {
   screen_auto = prefs.getInt("soff", 1) != 0;
   time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE ? 1 : 0) != 0;
   for (int i = 0; i < ALARM_COUNT; i++) {
+  night_enabled = prefs.getInt("night", 1) != 0;
     char k[8];
     alarm_t * a = &alarms[i];
     snprintf(k, sizeof(k), "a%d_h", i);  a->hh = prefs.getInt(k, ALARM_DEFAULT_HH);
