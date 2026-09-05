@@ -2796,6 +2796,7 @@ static void boot_poll(void) {
 
 void setup() {
   Serial.begin(115200);
+  setCpuFrequencyMhz(CPU_FREQ_MHZ);   // before the radios and Serial come up
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
   Serial.println(LVGL_Arduino);
 

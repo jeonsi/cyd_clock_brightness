@@ -173,6 +173,7 @@ Arduino IDE 기준:
 
 | 매크로 | 기본값 | 설명 |
 |---|---|---|
+| `CPU_FREQ_MHZ` | 160 | CPU 클럭(MHz). 240 = 가장 빠른 화면 전환, 160 = ~10mA 절약(체감 차 거의 없음) |
 | `TZ_INFO` | `"KST-9"` | POSIX 타임존 문자열 |
 | `NTP_SYNC_INTERVAL_MS` | 1시간 | SNTP 재동기화 주기 |
 | `BL_MIN_PCT` | 5 | 밝기 하한(%) |
