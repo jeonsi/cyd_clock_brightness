@@ -18,6 +18,12 @@
  *   차이만큼 틀리게 표시된다.
  *
  * 필요 라이브러리: NimBLE-Arduino 2.x (Library Manager에서 "NimBLE-Arduino")
+ *
+ * 안전장치: 수신 페이로드를 hex로 로그하고, 이미 유효한 시계 대비
+ * CTS_MAX_JUMP_S 이상 튀는 값은 거부하며, CTS 읽기와 ANCS 탐색이 한 연결에서
+ * 동시에 돌지 않도록 직렬화한다(ancs_busy). 동시 실행 시 NimBLE가 응답을
+ * 엇갈려 배달해 ANCS 특성 선언이 CTS 시간(연도 11024)으로 파싱되어 시계를
+ * 덮어쓴 사고가 esp32-c3-clock 쪽에서 실측됨. (esp32-c3-clock과 동일 코드)
  */
 #ifndef BLE_TIME_H
 #define BLE_TIME_H
@@ -29,12 +35,17 @@
 #include <sys/time.h>
 #include <time.h>
 
+#ifndef CTS_MAX_JUMP_S
+#define CTS_MAX_JUMP_S (24 * 3600)   // 유효한 시계 대비 이보다 크게 튀는 CTS 값은 무시
+#endif
+
 static uint16_t cts_conn            = BLE_HS_CONN_HANDLE_NONE;
 static bool     cts_read_pending    = false;
 static bool     cts_synced_once     = false;
 static uint32_t cts_sync_count      = 0;     // 성공한 동기화 횟수 (듀티사이클용)
 static uint32_t cts_last_attempt_ms = 0;
 static bool     ancs_attempted      = false;    // 이 연결에서 ANCS 구독을 시도했는가
+static bool     ancs_busy           = false;    // ANCS 탐색/구독 절차가 진행 중인가
 
 static void ancs_subscribe_begin(uint16_t conn);   // 아래 ANCS 절 참고
 
@@ -49,13 +60,16 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
 
   if (attr != NULL && attr->om != NULL) {
     cts_got_attr = true;
-    Serial.printf("BLE CTS: attr handle %u, %d bytes\n",
-                  attr->handle, OS_MBUF_PKTLEN(attr->om));
     // Exact Time 256: year(2,LE) month day hours minutes seconds
     //                 day_of_week fractions256 adjust_reason
     uint8_t buf[10];
     uint16_t len = 0;
     ble_hs_mbuf_to_flat(attr->om, buf, sizeof(buf), &len);
+    char hex[3 * sizeof(buf) + 1] = "";
+    for (uint16_t i = 0; i < len && i < sizeof(buf); i++)
+      snprintf(hex + i * 3, 4, "%02X ", buf[i]);
+    Serial.printf("BLE CTS: attr handle %u, %d bytes: %s\n",
+                  attr->handle, OS_MBUF_PKTLEN(attr->om), hex);
     if (len >= 7) {
       struct tm t = {};
       t.tm_year  = (buf[0] | (buf[1] << 8)) - 1900;
@@ -66,7 +80,18 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
       t.tm_sec   = buf[6];
       t.tm_isdst = -1;
       time_t epoch = mktime(&t);        // 폰의 현지 시간을 TZ_INFO로 해석
-      if (epoch > 1000000000) {         // sanity: 2001년 이후
+      time_t now = time(nullptr);
+      if (epoch <= 1000000000) {        // sanity: 2001년 이후만 유효
+        Serial.println("BLE CTS: nonsense timestamp, ignored");
+      } else if (now > 1735689600 /* 2025-01-01: 시계가 이미 유효 */ &&
+                 (epoch > now + CTS_MAX_JUMP_S || epoch < now - CTS_MAX_JUMP_S)) {
+        // 유효하게 돌던 시계가 하루 이상 튀는 값은 폰/링크 이상으로 보고
+        // 버린다 - 10초 뒤 재시도가 이어진다. (실제로 재동기화에서 2년 전
+        // 날짜가 내려온 사례가 있음; 위의 hex 로그로 원인을 추적)
+        Serial.printf("BLE CTS: implausible %04d-%02d-%02d %02d:%02d:%02d (clock jump > %d s), ignored\n",
+                      buf[0] | (buf[1] << 8), buf[2], buf[3], buf[4], buf[5], buf[6],
+                      (int)CTS_MAX_JUMP_S);
+      } else {
         struct timeval tv;
         tv.tv_sec  = epoch;
         tv.tv_usec = (len >= 9) ? (suseconds_t)((uint32_t)buf[8] * 1000000UL / 256UL) : 0;
@@ -81,12 +106,16 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
 
   if (status != 0) {                    // BLE_HS_EDONE(완료) 포함: 절차 종료
     cts_read_pending = false;
-    // ATT는 연결당 GATT 절차를 하나씩만 허용하므로, CTS 읽기가 끝난 지금
-    // ANCS 구독(자동 재연결용)을 시작한다. 연결당 1회.
-    if (!ancs_attempted && cts_conn != BLE_HS_CONN_HANDLE_NONE)
-      ancs_subscribe_begin(cts_conn);
     if (status == BLE_HS_EDONE) {
-      // 완료. 속성을 하나도 못 받았다면 폰의 GATT에서 0x2A2B를 못 찾은 것
+      // ANCS 구독은 CTS 읽기가 "끝까지 완료(EDONE)"된 뒤에만 시작한다.
+      // 원래는 실패(0x0105: 페어링 전 읽기 거부) 직후에도 시작했는데, 그러면
+      // 곧이어 암호화 완료로 재시도되는 CTS 읽기와 ANCS 특성 탐색이 한 연결
+      // 위에서 동시에 돌고, NimBLE가 응답을 서로 엇갈려 배달한다 - ANCS 특성
+      // 선언(19바이트, 앞 2바이트가 0x2B10)이 CTS 콜백으로 들어와 연도
+      // 11024년으로 파싱되어 시계를 덮어쓴 사고의 원인 (hex 로그로 확인).
+      if (!ancs_attempted && cts_conn != BLE_HS_CONN_HANDLE_NONE)
+        ancs_subscribe_begin(cts_conn);
+      // 속성을 하나도 못 받았다면 폰의 GATT에서 0x2A2B를 못 찾은 것
       // (페어링 직후 iOS가 서비스 노출을 갱신하는 중일 수 있음 - 10초 뒤 재시도).
       if (!cts_got_attr)
         Serial.println("BLE CTS: Current Time characteristic not found (will retry)");
@@ -100,7 +129,9 @@ static int cts_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
 }
 
 static void cts_request_read(void) {
-  if (cts_conn == BLE_HS_CONN_HANDLE_NONE || cts_read_pending) return;
+  // ancs_busy: ANCS 탐색/CCCD 쓰기가 도는 동안 읽기를 시작하지 않는다
+  // (연결당 GATT 절차는 하나 - 위의 동시 실행 사고 참고). 10초 뒤 재시도된다.
+  if (cts_conn == BLE_HS_CONN_HANDLE_NONE || cts_read_pending || ancs_busy) return;
   cts_read_pending = true;
   cts_got_attr = false;
   cts_last_attempt_ms = millis();
@@ -133,6 +164,7 @@ static uint16_t ancs_ns_val = 0;                // Notification Source 값 핸�
 static int ancs_cccd_write_cb(uint16_t conn, const struct ble_gatt_error *error,
                               struct ble_gatt_attr *attr, void *arg) {
   (void)conn; (void)attr; (void)arg;
+  ancs_busy = false;                              // 절차 종료(성공/실패 공통)
   int status = error ? error->status : 0;
   if (status == 0)
     Serial.println("BLE ANCS: subscribed (iOS will auto-reconnect from now on)");
@@ -152,11 +184,16 @@ static int ancs_dsc_cb(uint16_t conn, const struct ble_gatt_error *error,
     static const uint8_t on[2] = { 0x01, 0x00 };    // notifications on
     int rc = ble_gattc_write_flat(conn, dsc->handle, on, sizeof(on),
                                   ancs_cccd_write_cb, NULL);
-    if (rc != 0) Serial.printf("BLE ANCS: CCCD write start failed (rc %d)\n", rc);
+    if (rc != 0) {
+      Serial.printf("BLE ANCS: CCCD write start failed (rc %d)\n", rc);
+      ancs_busy = false;
+    }
     return BLE_HS_EDONE;                            // stop descriptor discovery
   }
-  if (dsc == NULL && !cccd_found)
+  if (dsc == NULL && !cccd_found) {
     Serial.println("BLE ANCS: CCCD descriptor not found");
+    ancs_busy = false;                              // 절차가 CCCD 없이 끝남
+  }
   if (dsc == NULL) cccd_found = false;              // reset for the next attempt
   return 0;
 }
@@ -168,12 +205,17 @@ static int ancs_chr_cb(uint16_t conn, const struct ble_gatt_error *error,
     ancs_ns_val = chr->val_handle;
     Serial.printf("BLE ANCS: Notification Source at handle %u\n", ancs_ns_val);
     int rc = ble_gattc_disc_all_dscs(conn, chr->val_handle, ancs_end, ancs_dsc_cb, NULL);
-    if (rc != 0) Serial.printf("BLE ANCS: dsc discovery start failed (rc %d)\n", rc);
+    if (rc != 0) {
+      Serial.printf("BLE ANCS: dsc discovery start failed (rc %d)\n", rc);
+      ancs_busy = false;
+    }
     return BLE_HS_EDONE;
   }
-  if (ancs_ns_val == 0)
+  if (ancs_ns_val == 0) {
     Serial.printf("BLE ANCS: Notification Source not found (status 0x%04x)\n",
                   error ? error->status : 0);
+    ancs_busy = false;
+  }
   return 0;
 }
 
@@ -186,21 +228,30 @@ static int ancs_svc_cb(uint16_t conn, const struct ble_gatt_error *error,
     Serial.printf("BLE ANCS: service found (handles %u..%u)\n", ancs_start, ancs_end);
     int rc = ble_gattc_disc_chrs_by_uuid(conn, ancs_start, ancs_end,
                                          &UUID_ANCS_NOTIF_SRC.u, ancs_chr_cb, NULL);
-    if (rc != 0) Serial.printf("BLE ANCS: chr discovery start failed (rc %d)\n", rc);
+    if (rc != 0) {
+      Serial.printf("BLE ANCS: chr discovery start failed (rc %d)\n", rc);
+      ancs_busy = false;
+    }
     return BLE_HS_EDONE;
   }
-  if (ancs_start == 0)
+  if (ancs_start == 0) {
     Serial.printf("BLE ANCS: service not found (status 0x%04x)\n",
                   error ? error->status : 0);
+    ancs_busy = false;
+  }
   return 0;
 }
 
 static void ancs_subscribe_begin(uint16_t conn) {
   ancs_start = ancs_end = ancs_ns_val = 0;
   ancs_attempted = true;
+  ancs_busy = true;
   Serial.println("BLE ANCS: subscribing (for iOS auto-reconnect)...");
   int rc = ble_gattc_disc_svc_by_uuid(conn, &UUID_ANCS_SVC.u, ancs_svc_cb, NULL);
-  if (rc != 0) Serial.printf("BLE ANCS: svc discovery start failed (rc %d)\n", rc);
+  if (rc != 0) {
+    Serial.printf("BLE ANCS: svc discovery start failed (rc %d)\n", rc);
+    ancs_busy = false;
+  }
 }
 
 class CtsServerCallbacks : public NimBLEServerCallbacks {
@@ -227,6 +278,7 @@ class CtsServerCallbacks : public NimBLEServerCallbacks {
     cts_conn = BLE_HS_CONN_HANDLE_NONE;
     cts_read_pending = false;
     ancs_attempted = false;
+    ancs_busy = false;
     NimBLEDevice::startAdvertising();   // 페어링된 폰이 돌아오면 재연결되도록
   }
 
@@ -288,6 +340,7 @@ static void ble_time_end(void) {
   cts_conn = BLE_HS_CONN_HANDLE_NONE;
   cts_read_pending = false;
   ancs_attempted = false;
+  ancs_busy = false;
   NimBLEDevice::deinit(true);
   Serial.println("BLE: stack stopped");
 }
