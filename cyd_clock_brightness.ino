@@ -1530,8 +1530,12 @@ static void make_link_icon(lv_obj_t * face, int which) {
 // With BLE_DUTY_CYCLE the radio runs only around each resync: once a sync has
 // landed the stack is stopped (bonds live in NVS and survive) and one
 // NTP_SYNC_INTERVAL_MS later it is restarted - the bonded iPhone sees the
-// advertising and reconnects on its own. The window stays open BLE_LINGER_MS
-// past the sync so the very first pairing can finish the ANCS ("알림 공유")
+// advertising and reconnects on its own. Once the sync has landed AND the
+// ANCS subscription succeeded (iOS refuses the CCCD write until 알림 공유 is
+// granted, so success doubles as "not mid-first-pairing"), the window closes
+// BLE_SETTLE_MS later - keeping it open longer only invites connect/drop
+// churn on a flaky link. Without a subscription it stays open up to
+// BLE_LINGER_MS past the sync so the very first pairing can finish the ANCS
 // step, and a window that never syncs (phone away) closes after
 // BLE_SYNC_TIMEOUT_MS - except during boot, when there is no valid time yet.
 static void ble_duty_poll(void) {
@@ -1556,11 +1560,14 @@ static void ble_duty_poll(void) {
     last_sync_ok_ms = millis();
     if (!synced_ms) synced_ms = millis();
   }
-  if (synced_ms && millis() - synced_ms >= BLE_LINGER_MS) {
+  bool early = synced_ms && ancs_subscribed && !ancs_busy &&
+               millis() - synced_ms >= BLE_SETTLE_MS;
+  if (synced_ms && (early || millis() - synced_ms >= BLE_LINGER_MS)) {
     ble_time_end();
     ble_radio_on = false;
     next_ms = synced_ms + NTP_SYNC_INTERVAL_MS;
-    Serial.println("BLE: radio off until the next resync");
+    Serial.println(early ? "BLE: synced and subscribed - radio off early"
+                         : "BLE: radio off until the next resync");
   } else if (!synced_ms && boot_state == BOOT_DONE &&
              millis() - ble_window_t0 >= BLE_SYNC_TIMEOUT_MS) {
     ble_time_end();
