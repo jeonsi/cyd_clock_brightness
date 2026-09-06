@@ -399,9 +399,12 @@ static uint32_t bl_pct_to_duty(int pct) {
 }
 
 static void bl_apply(void) {
+  int pct = bl_pct * bl_auto_factor / 100 * bl_night_factor / 100;
+  // Brownout guard: keep the backlight moderate until boot is done - the
+  // Wi-Fi/BLE bring-up draws its biggest bursts exactly then.
+  if (boot_state != BOOT_DONE && pct > 40) pct = 40;
   // Screen timeout: duty 0 (not the faint-glow floor) until a touch wakes it
-  uint32_t duty = screen_off
-      ? 0 : bl_pct_to_duty(bl_pct * bl_auto_factor / 100 * bl_night_factor / 100);
+  uint32_t duty = screen_off ? 0 : bl_pct_to_duty(pct);
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWrite(BL_PIN, duty);
 #else
@@ -1545,7 +1548,7 @@ static void ble_duty_poll(void) {
   static uint32_t next_ms    = 0;   // radio off: when to open the next window
   if (!ble_radio_on) {
     if ((int32_t)(millis() - next_ms) >= 0) {
-      Serial.println("BLE: radio on for resync");
+      Serial.printf("BLE: radio on for resync (heap %u)\n", (unsigned)ESP.getFreeHeap());
       cts_synced_once = false;      // back to the 10 s retry cadence inside the window
       ble_time_begin();
       ble_radio_on  = true;
@@ -1566,14 +1569,16 @@ static void ble_duty_poll(void) {
     ble_time_end();
     ble_radio_on = false;
     next_ms = synced_ms + NTP_SYNC_INTERVAL_MS;
-    Serial.println(early ? "BLE: synced and subscribed - radio off early"
-                         : "BLE: radio off until the next resync");
+    Serial.printf("%s (heap %u)\n",
+                  early ? "BLE: synced and subscribed - radio off early"
+                        : "BLE: radio off until the next resync",
+                  (unsigned)ESP.getFreeHeap());
   } else if (!synced_ms && boot_state == BOOT_DONE &&
              millis() - ble_window_t0 >= BLE_SYNC_TIMEOUT_MS) {
     ble_time_end();
     ble_radio_on = false;
     next_ms = millis() + NTP_SYNC_INTERVAL_MS;
-    Serial.println("BLE: no sync in this window, retrying next interval");
+    Serial.printf("BLE: no sync in this window, retrying next interval (heap %u)\n", (unsigned)ESP.getFreeHeap());
   }
 #else
   ble_time_tick();
@@ -2586,7 +2591,12 @@ static void wifi_creds_load(void) {
 }
 
 static void wifi_connect_begin(void) {
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA);          // starts the Wi-Fi driver, so TX power can be set
+  // Brownout guard: the default 19.5 dBm TX bursts (~250 mA peaks) dip a weak
+  // USB supply and hard-reset the board (measured: BROWNOUT reset loop while
+  // associating). 11 dBm roughly halves the peak at little indoor range cost.
+  // Set BEFORE begin() so even the first probe/auth frames go out capped.
+  WiFi.setTxPower(WIFI_POWER_11dBm);
   WiFi.setAutoReconnect(true);
   WiFi.begin(wifi_ssid.c_str(), wifi_pass.c_str());
   boot_t0 = wifi_attempt_ms = millis();
@@ -2787,6 +2797,7 @@ static void boot_poll(void) {
         lv_create_main_gui();
         Serial.printf("free heap after GUI: %u\n", (unsigned)ESP.getFreeHeap());
         boot_state = BOOT_DONE;
+        bl_apply();   // lift the boot-time backlight cap
         break;
       }
       if (millis() - last_ui_ms > 1000) {
@@ -2812,6 +2823,19 @@ static void boot_poll(void) {
 void setup() {
   setCpuFrequencyMhz(CPU_FREQ_MHZ);   // before the radios and Serial come up
   Serial.begin(115200);
+  delay(300);   // the first bytes after a reset get eaten while the USB-serial resyncs
+  // Why did we boot? POWERON = plugged in, SW = ESP.restart()/panic-reboot,
+  // PANIC = crash, TASK_WDT/INT_WDT = watchdog, BROWNOUT = power dip.
+  esp_reset_reason_t rr = esp_reset_reason();
+  const char * rs = (rr == ESP_RST_POWERON) ? "POWERON"
+                  : (rr == ESP_RST_SW)      ? "SW (restart)"
+                  : (rr == ESP_RST_PANIC)   ? "PANIC (crash)"
+                  : (rr == ESP_RST_TASK_WDT)? "TASK_WDT"
+                  : (rr == ESP_RST_INT_WDT) ? "INT_WDT"
+                  : (rr == ESP_RST_WDT)     ? "WDT"
+                  : (rr == ESP_RST_BROWNOUT)? "BROWNOUT (power dip)"
+                  : "OTHER";
+  Serial.printf("Reset reason: %s (%d)\n", rs, (int)rr);
   String LVGL_Arduino = String("LVGL Library Version: ") + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
   Serial.println(LVGL_Arduino);
 
@@ -2956,6 +2980,11 @@ void setup() {
     boot_state = BOOT_NTP;   // boot_poll waits for the first CTS sync
     boot_t0 = millis();
   } else {
+    // Cold plug-in: the adapter and the board's caps are still settling when
+    // the Wi-Fi surge hits, and the very first boot browned out once every
+    // time (then always succeeded on the warm retry). Give the supply a
+    // moment before starting the radio.
+    if (rr == ESP_RST_POWERON) delay(1200);
     // The linked-in BT controller statically reserves ~60 KB of DRAM even
     // when unused. On a Wi-Fi boot BLE stays off until the next reboot
     // (mode switching reboots anyway), so hand that memory back to the
