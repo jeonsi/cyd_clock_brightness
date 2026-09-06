@@ -293,8 +293,9 @@ static const theme_t THEMES[] = {
 #define LDR_RAW_DARK     1200
 
 // 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %). 밤에 너무 어두우면
-// 올리고(30), 밤에 더 어둡게 하려면 내림(10).
-#define BL_AUTO_MIN_PCT  15
+// 올리고(35), 밤에 더 어둡게 하려면 내림(15). 야간 감광(NIGHT_PCT)이 여기에
+// 다시 곱해지는 것을 감안할 것(25% x 50% = 12.5%).
+#define BL_AUTO_MIN_PCT  25
 
 // 1이면 1초마다 LDR raw/EMA/적용 배율을 시리얼에 출력.
 #define LDR_DEBUG        0

@@ -185,7 +185,7 @@ Arduino IDE 기준:
 | `LDR_RAW_BRIGHT/DARK` | 40/1200 | 조도 센서 ADC 보정값(이 보드 실측: 실내 조명 0, 완전 암실 ~1750). 밤에 너무 밝으면 DARK를 내리고, 너무 일찍 어두워지면 올림. `LDR_DEBUG 1`로 raw 확인 |
 | `NIGHT_FROM_HOUR/TO_HOUR` | 20/7 | 야간 감광 시간대(자정 걸침 지원) |
 | `NIGHT_PCT` | 50 | 야간 시간대의 밝기(주간 대비 %). 100이면 기능 없음 |
-| `BL_AUTO_MIN_PCT` | 15 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
+| `BL_AUTO_MIN_PCT` | 25 | 완전한 어둠에서 유지할 밝기(슬라이더 설정값 대비 %) |
 | `WIFI_RETRY_MS` | 30초 | Wi-Fi 연결 재시도 주기 |
 | `TIME_SYNC_BLE` | 1 | 시간 동기화 방식의 최초 부팅 기본값(1 = BLE CTS, 0 = Wi-Fi+SNTP). 이후에는 밝기 패널의 BLE/WIFI 버튼으로 전환(NVS 저장, 즉시 재부팅) |
 | `BLE_DEVICE_NAME` | "CYD Clock" | BLE 모드에서 아이폰 Bluetooth 목록에 표시되는 이름 |
