@@ -1454,9 +1454,14 @@ static void timer_cb(lv_timer_t * timer) {
     bool term_today = false;
     const char * term = kst_current_term(&t, &term_today);
     if (term) {
-      lv_color_t tc = term_today ? TERM_TODAY_COLOR : LUNAR_COLOR;
+      // On the first day of the term the name shows inverted: a green pill
+      // with white text (same treatment as the weekday on red days).
       lv_label_set_text(label_lunar_term, term);
-      lv_obj_set_style_text_color(label_lunar_term, tc, 0);
+      lv_obj_set_style_text_color(label_lunar_term,
+          term_today ? lv_color_hex(0xFFFFFF) : LUNAR_COLOR, 0);
+      lv_obj_set_style_bg_opa(label_lunar_term,
+          term_today ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+      lv_obj_set_style_pad_right(label_lunar_term, term_today ? 6 : 0, 0);
       lv_obj_remove_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(label_lunar_term, LV_OBJ_FLAG_HIDDEN);
@@ -2532,6 +2537,10 @@ void lv_create_main_gui(void) {
   lv_obj_add_style(label_lunar_term, &style_lunar, 0);
   lv_obj_set_style_translate_y(label_lunar_term, 3, 0);
   lv_obj_set_style_pad_left(label_lunar_term, 6, 0);
+  // Inverted look on the first day of a term (bg toggled in the date update)
+  lv_obj_set_style_bg_color(label_lunar_term, TERM_TODAY_COLOR, 0);
+  lv_obj_set_style_bg_opa(label_lunar_term, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_radius(label_lunar_term, 6, 0);
 
   create_analog_face();
   create_calendar_face();
