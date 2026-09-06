@@ -114,7 +114,7 @@
 // 요일 색: 평일은 초록, 일요일·공휴일은 빨강. 달력 화면의 빨강/파랑은
 // 테마 명암에 따라 코드에서 자동 선택되므로 여기서 바꾸지 않음.
 #define WEEKDAY_COLOR_NORMAL  lv_color_hex(0x33CC66)
-#define WEEKDAY_COLOR_HOLIDAY lv_color_hex(0xE60000)
+#define WEEKDAY_COLOR_HOLIDAY lv_color_hex(0xE60000)   // 공휴일: (일) 전체가 이 색 바탕의 역상(흰 글자)으로 표시
 
 // 하단 줄에 뜨는 이름 색: 공휴일(설날·추석 등)은 요일 빨강과 동일,
 // 비공휴일 세시명절(정월대보름·단오·칠석)은 초록.

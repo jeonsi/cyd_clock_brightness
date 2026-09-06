@@ -1402,8 +1402,11 @@ static void timer_cb(lv_timer_t * timer) {
     lv_label_set_text(label_datenum, buf);
     snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[t.tm_wday]);
     lv_label_set_text(label_wd, buf);
-    lv_color_t wdc = kr_is_red_day(&t) ? WEEKDAY_COLOR_HOLIDAY : WEEKDAY_COLOR_NORMAL;
-    lv_obj_set_style_text_color(label_wd, wdc, 0);
+    // Red days show the whole "(일)" inverted: a red pill with light text
+    bool red_day = kr_is_red_day(&t);
+    lv_obj_set_style_text_color(label_wd,
+        red_day ? lv_color_hex(0xFFFFFF) : WEEKDAY_COLOR_NORMAL, 0);
+    lv_obj_set_style_bg_opa(label_wd, red_day ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
 
 
     cal_refresh(&t);
@@ -2403,6 +2406,10 @@ void lv_create_main_gui(void) {
   lv_obj_set_style_text_align(label_wd, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_color(label_wd, WEEKDAY_COLOR_NORMAL, 0);
   lv_obj_set_style_translate_y(label_wd, WEEKDAY_BASELINE_NUDGE, 0);
+  // Inverted look for red days (bg toggled between TRANSP and COVER daily)
+  lv_obj_set_style_bg_color(label_wd, WEEKDAY_COLOR_HOLIDAY, 0);
+  lv_obj_set_style_bg_opa(label_wd, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_radius(label_wd, 6, 0);
 
   // ================= Time row: [ HH:MM ][ AM/PM over SS ] =================
   lv_obj_t * time_row = make_box(face_digital);
