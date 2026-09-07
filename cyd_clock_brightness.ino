@@ -311,6 +311,8 @@ static lv_obj_t * label_al_ampm;
 static lv_obj_t * lbl_al_toggle;        // bell + ON/OFF on the toggle button
 static lv_obj_t * bell_box[2][ALARM_COUNT]; // per-alarm bell icons: [0] digital, [1] analog
 static lv_obj_t * link_icon[2];       // time-source (BLE/Wi-Fi) status, digital/analog
+static lv_obj_t * snd_icon_lbl[2];    // speaker status next to it (slashed while muted)
+static lv_obj_t * snd_icon_slash[2];
 static bool time_sync_ble = (TIME_SYNC_BLE != 0);   // NVS "tsrc"; applied at boot
 static bool     ble_radio_on = false;               // duty cycle: radio currently up
 static uint32_t ble_window_t0 = 0;                  // when the current radio window opened
@@ -362,6 +364,10 @@ static int      bl_auto_factor = 100;   // % of bl_pct, driven by the LDR (100 w
 static int      bl_night_factor = 100;  // % cap during NIGHT_FROM..TO hours (NIGHT_PCT)
 static bool     night_enabled = true;   // night dimming on/off (panel toggle, NVS "night")
 static lv_obj_t * lbl_night;            // its button label
+static bool     sound_on = true;        // all sounds on/off (panel toggle, NVS "snd")
+static bool     display_flip = false;   // NVS "flip"; panel FLIP button, applied live
+static lv_obj_t * lbl_snd;              // its button label (speaker symbol)
+static lv_obj_t * snd_slash;            // diagonal line over it while muted
 static int      bl_ldr_target  = 100;   // what the LDR alone would set the factor to, for the label
 static float    ldr_ema = -1.0f;
 static bool     screen_off = false;     // backlight fully off after SCREEN_OFF_MS idle
@@ -762,6 +768,7 @@ static void sw_reset_cb(lv_event_t * e) {
 
 // ---- Countdown timer -------------------------------------------------------
 static void spk_tone(uint32_t hz) {
+  if (!sound_on && hz) hz = 0;   // muted: silence requests pass, tones do not
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
   ledcWriteTone(SPK_PIN, hz);
 #else
@@ -1349,7 +1356,7 @@ static void timer_cb(lv_timer_t * timer) {
     char buf[8];
 
 #if HOURLY_CHIME
-    if (!first_update && minute_changed && t.tm_min == 0 && !alarm_on &&
+    if (sound_on && !first_update && minute_changed && t.tm_min == 0 && !alarm_on &&
         t.tm_hour >= CHIME_FROM_HOUR && t.tm_hour <= CHIME_TO_HOUR) {
       // Casio-style pip-pip
       spk_tone(CHIME_TONE_HZ);
@@ -1595,6 +1602,35 @@ static void ble_duty_poll(void) {
 #endif
 }
 
+// Speaker status next to the link icon: plain speaker while sound is on,
+// the bare speaker with a slash while muted (same look as OFF alarm bells).
+static void make_snd_icon(lv_obj_t * face, int which) {
+  static const lv_point_precise_t slash[2] = { {2, 13}, {13, 2} };
+  lv_obj_t * box = make_box(face);
+  lv_obj_set_size(box, 15, 15);
+  lv_obj_align(box, LV_ALIGN_BOTTOM_LEFT, 34, -12);
+  lv_obj_t * l = lv_label_create(box);
+  lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+  lv_obj_center(l);
+  lv_obj_t * ln = lv_line_create(box);
+  lv_line_set_points(ln, slash, 2);
+  lv_obj_set_style_line_width(ln, 2, 0);
+  lv_obj_set_style_line_rounded(ln, true, 0);
+  lv_obj_set_style_line_color(ln, lv_color_hex(0xFF3300), 0);
+  lv_obj_remove_flag(ln, LV_OBJ_FLAG_CLICKABLE);
+  snd_icon_lbl[which] = l;
+  snd_icon_slash[which] = ln;
+}
+
+static void snd_icons_refresh(void) {
+  for (int i = 0; i < 2; i++) {
+    if (!snd_icon_lbl[i]) continue;
+    lv_label_set_text(snd_icon_lbl[i], sound_on ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+    if (sound_on) lv_obj_add_flag(snd_icon_slash[i], LV_OBJ_FLAG_HIDDEN);
+    else          lv_obj_remove_flag(snd_icon_slash[i], LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 static void link_icon_refresh(void) {
   static int last_state = -1;
   // 2 = stale (nothing synced for SYNC_STALE_MS: the shown time free-runs),
@@ -1818,6 +1854,48 @@ static void night_btn_cb(lv_event_t * e) {
   bl_last_touch_ms = millis();
 }
 
+// ---- Sound (mute) toggle on the brightness panel ----------------------------
+// Silences everything - boot beep, hourly chime, timer and wake-alarm tones.
+// Alarms still flash the screen while muted.
+static void snd_btn_refresh(void) {
+  // Muted = the bare speaker with a slash over it (same look as OFF alarm
+  // bells); LVGL's built-in symbols have no slashed-speaker glyph.
+  lv_label_set_text(lbl_snd, sound_on ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+  if (sound_on) lv_obj_add_flag(snd_slash, LV_OBJ_FLAG_HIDDEN);
+  else          lv_obj_remove_flag(snd_slash, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void snd_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  sound_on = !sound_on;
+  prefs.putInt("snd", sound_on ? 1 : 0);
+  if (!sound_on) spk_tone(0);   // cut anything currently sounding
+  snd_btn_refresh();
+  snd_icons_refresh();
+  bl_last_touch_ms = millis();
+}
+
+// ---- Software reset button on the brightness panel ---------------------------
+static void reset_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  Serial.println("Restart requested from the panel");
+  delay(100);       // let the log flush
+  ESP.restart();    // same effect as the physical EN button
+}
+
+// ---- Display-flip toggle on the brightness panel ----------------------------
+// Rotation is LVGL's software rotation, so flipping takes effect immediately
+// (touch included) - no reboot needed.
+static void flip_btn_cb(lv_event_t * e) {
+  LV_UNUSED(e);
+  display_flip = !display_flip;
+  prefs.putInt("flip", display_flip ? 1 : 0);
+  lv_display_set_rotation(lv_display_get_default(),
+                          display_flip ? LV_DISPLAY_ROTATION_90
+                                       : LV_DISPLAY_ROTATION_270);
+  bl_last_touch_ms = millis();
+}
+
 // ---- Screen-timeout toggle on the brightness panel -------------------------
 // Shows the timeout it will apply ("30s" / "5m") when auto-off is armed, or
 // "ON" when the screen is set to stay on.
@@ -1911,6 +1989,30 @@ static void create_brightness_panel(void) {
   lbl_night = lv_obj_get_child(nb, 0);
   lv_obj_set_style_text_font(lbl_night, &lv_font_montserrat_14, 0);
   night_btn_refresh();
+
+  // Mute toggle (speaker on/off for every sound incl. the boot beep)
+  lv_obj_t * mb = make_button(bl_panel, "", snd_btn_cb, NULL, 44, 26);
+  lv_obj_align(mb, LV_ALIGN_TOP_RIGHT, -100, 26);
+  lbl_snd = lv_obj_get_child(mb, 0);
+  // Display flip toggle, left of the mute button
+  lv_obj_t * fb = make_button(bl_panel, "FLIP", flip_btn_cb, NULL, 52, 26);
+  lv_obj_align(fb, LV_ALIGN_TOP_RIGHT, -148, 26);
+  lv_obj_set_style_text_font(lv_obj_get_child(fb, 0), &lv_font_montserrat_14, 0);
+
+  // Software reset, leftmost on the second row
+  lv_obj_t * xb = make_button(bl_panel, "RESET", reset_btn_cb, NULL, 72, 26);
+  lv_obj_align(xb, LV_ALIGN_TOP_LEFT, 0, 26);
+  lv_obj_set_style_text_font(lv_obj_get_child(xb, 0), &lv_font_montserrat_14, 0);
+
+  static const lv_point_precise_t snd_slash_pts[2] = { {2, 15}, {15, 2} };
+  snd_slash = lv_line_create(mb);
+  lv_line_set_points(snd_slash, snd_slash_pts, 2);
+  lv_obj_set_style_line_width(snd_slash, 2, 0);
+  lv_obj_set_style_line_rounded(snd_slash, true, 0);
+  lv_obj_set_style_line_color(snd_slash, lv_color_hex(0xFF3300), 0);
+  lv_obj_remove_flag(snd_slash, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_center(snd_slash);
+  snd_btn_refresh();
 
   // Background color swatches in two full-width rows below the % label
   // (light row, then dark row - mirroring the THEMES order); the current
@@ -2068,6 +2170,7 @@ static void create_analog_face(void) {
   // Alarm bells in the same bottom-right spot as on the digital face
   make_bell_row(face_analog, 1);
   make_link_icon(face_analog, 1);
+  make_snd_icon(face_analog, 1);
   // Colors are applied by theme_apply() from lv_create_main_gui() once
   // every face exists - calling it here would leave the cards of the faces
   // created later (calendar, stopwatch, timer) at LVGL's default white.
@@ -2341,6 +2444,7 @@ void lv_create_main_gui(void) {
   // One bell per alarm in the plate's bottom-right corner (slashed when OFF)
   make_bell_row(face_digital, 0);
   make_link_icon(face_digital, 0);
+  make_snd_icon(face_digital, 0);
 
   // ---- Styles
   static lv_style_t style_time;
@@ -2547,6 +2651,7 @@ void lv_create_main_gui(void) {
   create_stopwatch_face();
   create_timer_face();
   create_alarm_face();
+  snd_icons_refresh();  // both face icons exist now
   theme_apply();        // now that every face and card exists
   face_apply();         // show the face restored from NVS
 
@@ -2865,6 +2970,8 @@ void setup() {
   screen_auto = prefs.getInt("soff", 1) != 0;
   time_sync_ble = prefs.getInt("tsrc", TIME_SYNC_BLE ? 1 : 0) != 0;
   night_enabled = prefs.getInt("night", 1) != 0;
+  sound_on = prefs.getInt("snd", 1) != 0;
+  display_flip = prefs.getInt("flip", 0) != 0;
   for (int i = 0; i < ALARM_COUNT; i++) {
     char k[8];
     alarm_t * a = &alarms[i];
@@ -2893,9 +3000,10 @@ void setup() {
   // Create a display object
   lv_display_t * disp;
   disp = lv_tft_espi_create(SCREEN_WIDTH, SCREEN_HEIGHT, draw_buf, sizeof(draw_buf));
-  // Landscape; DISPLAY_FLIP mounts the clock upside down. LVGL rotates the
-  // frame and the touch coordinates together, so nothing else changes.
-  lv_display_set_rotation(disp, DISPLAY_FLIP ? LV_DISPLAY_ROTATION_90
+  // Landscape; display_flip mounts the clock upside down (panel FLIP button,
+  // stored in NVS "flip"). LVGL rotates the frame and the touch coordinates
+  // together, so nothing else changes.
+  lv_display_set_rotation(disp, display_flip ? LV_DISPLAY_ROTATION_90
                                              : LV_DISPLAY_ROTATION_270);
 
   // After the display init, so TFT_eSPI's own digitalWrite(TFT_BL, HIGH)
@@ -2963,7 +3071,7 @@ void setup() {
 
 #if BOOT_BEEP
   // Short double beep so a freshly attached speaker can be verified
-  for (int i = 0; i < 2; i++) {
+  if (sound_on) for (int i = 0; i < 2; i++) {
     spk_tone(ALARM_TONE_HZ);
     delay(120);
     spk_tone(0);
