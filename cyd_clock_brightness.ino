@@ -1796,7 +1796,7 @@ static void tsrc_btn_cb(lv_event_t * e) {
   LV_UNUSED(e);
   time_sync_ble = !time_sync_ble;
   prefs.putInt("tsrc", time_sync_ble ? 1 : 0);
-  lv_label_set_text(lbl_tsrc, "...");
+  if (lbl_tsrc) lv_label_set_text(lbl_tsrc, "...");
   Serial.printf("Time source -> %s, restarting\n", time_sync_ble ? "BLE" : "WIFI");
   delay(200);
   ESP.restart();
@@ -2591,6 +2591,7 @@ static lv_obj_t * ws_title;
 static lv_obj_t * ws_ta;                // password textarea
 static lv_obj_t * ws_kb;                // on-screen keyboard
 static lv_obj_t * boot_wifi_btn;        // "Wi-Fi setup" on the boot screen
+static lv_obj_t * boot_tsrc_btn;        // "switch to BLE/WIFI" escape on the boot screen
 static char       ws_sel_ssid[33];
 static bool       ws_scanning = false;
 
@@ -2629,6 +2630,7 @@ static void ws_close_and_connect(const char * ssid_txt, const char * pass_txt) {
   ws_root = ws_list = ws_title = ws_ta = ws_kb = NULL;
   lv_obj_remove_flag(boot_label, LV_OBJ_FLAG_HIDDEN);
   if (boot_wifi_btn) lv_obj_remove_flag(boot_wifi_btn, LV_OBJ_FLAG_HIDDEN);
+  if (boot_tsrc_btn) lv_obj_remove_flag(boot_tsrc_btn, LV_OBJ_FLAG_HIDDEN);
   lv_label_set_text(boot_label, "Connecting to Wi-Fi...");
   wifi_connect_begin();
   boot_state = BOOT_WIFI;
@@ -2719,6 +2721,7 @@ static void wifi_setup_open(void) {
   if (ws_root) return;
   lv_obj_add_flag(boot_label, LV_OBJ_FLAG_HIDDEN);
   if (boot_wifi_btn) lv_obj_add_flag(boot_wifi_btn, LV_OBJ_FLAG_HIDDEN);
+  if (boot_tsrc_btn) lv_obj_add_flag(boot_tsrc_btn, LV_OBJ_FLAG_HIDDEN);
   WiFi.disconnect();          // a join attempt in progress breaks scanning
 
   ws_root = lv_obj_create(lv_screen_active());
@@ -2803,6 +2806,8 @@ static void boot_poll(void) {
       if (getLocalTime(&t, 0)) {
         lv_obj_delete(boot_label);
         boot_label = NULL;
+        if (boot_tsrc_btn) { lv_obj_delete(boot_tsrc_btn); boot_tsrc_btn = NULL; }
+        if (boot_wifi_btn) { lv_obj_delete(boot_wifi_btn); boot_wifi_btn = NULL; }
         lv_create_main_gui();
         Serial.printf("free heap after GUI: %u\n", (unsigned)ESP.getFreeHeap());
         boot_state = BOOT_DONE;
@@ -2991,6 +2996,11 @@ void setup() {
     ble_window_t0 = millis();
     boot_state = BOOT_NTP;   // boot_poll waits for the first CTS sync
     boot_t0 = millis();
+    // Escape hatch: with no phone around this screen would wait forever -
+    // switch to Wi-Fi time sync (saves to NVS and reboots).
+    boot_tsrc_btn = make_button(lv_screen_active(), LV_SYMBOL_WIFI " WIFI",
+                                tsrc_btn_cb, NULL, 110, 34);
+    lv_obj_align(boot_tsrc_btn, LV_ALIGN_BOTTOM_MID, 0, -14);
   } else {
     // Cold plug-in: the adapter and the board's caps are still settling when
     // the Wi-Fi surge hits, and the very first boot browned out once every
@@ -3008,7 +3018,12 @@ void setup() {
     // "Wi-Fi setup" stays available while connecting, for changing networks
     boot_wifi_btn = make_button(lv_screen_active(), LV_SYMBOL_WIFI " Setup",
                                 ws_open_cb, NULL, 130, 34);
-    lv_obj_align(boot_wifi_btn, LV_ALIGN_BOTTOM_MID, 0, -14);
+    lv_obj_align(boot_wifi_btn, LV_ALIGN_BOTTOM_MID, -58, -14);
+    // Escape hatch: with no Wi-Fi around this screen would wait forever -
+    // switch to BLE time sync (saves to NVS and reboots).
+    boot_tsrc_btn = make_button(lv_screen_active(), LV_SYMBOL_BLUETOOTH " BLE",
+                                tsrc_btn_cb, NULL, 96, 34);
+    lv_obj_align(boot_tsrc_btn, LV_ALIGN_BOTTOM_MID, 60, -14);
     if (wifi_ssid.length() == 0) {
       wifi_setup_open();       // nothing stored anywhere: straight to setup
     } else {
