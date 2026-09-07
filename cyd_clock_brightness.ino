@@ -2888,7 +2888,10 @@ void setup() {
   // Create a display object
   lv_display_t * disp;
   disp = lv_tft_espi_create(SCREEN_WIDTH, SCREEN_HEIGHT, draw_buf, sizeof(draw_buf));
-  lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_270);
+  // Landscape; DISPLAY_FLIP mounts the clock upside down. LVGL rotates the
+  // frame and the touch coordinates together, so nothing else changes.
+  lv_display_set_rotation(disp, DISPLAY_FLIP ? LV_DISPLAY_ROTATION_90
+                                             : LV_DISPLAY_ROTATION_270);
 
   // After the display init, so TFT_eSPI's own digitalWrite(TFT_BL, HIGH)
   // does not fight the PWM channel.
