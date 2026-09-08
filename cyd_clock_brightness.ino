@@ -1901,12 +1901,14 @@ static void flip_btn_cb(lv_event_t * e) {
 // "ON" when the screen is set to stay on.
 static void screen_btn_refresh(void) {
   char buf[16];
+  // Open eye = the display stays awake (AOD), closed eye = it goes to
+  // sleep after the timeout.
   if (!screen_auto) {
-    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " AOD");   // Always-On Display
+    snprintf(buf, sizeof(buf), LV_SYMBOL_EYE_OPEN " AOD");
   } else if (SCREEN_OFF_MS < 60000) {
-    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " %lus", (unsigned long)(SCREEN_OFF_MS / 1000));
+    snprintf(buf, sizeof(buf), LV_SYMBOL_EYE_CLOSE " %lus", (unsigned long)(SCREEN_OFF_MS / 1000));
   } else {
-    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " %lum", (unsigned long)(SCREEN_OFF_MS / 60000));
+    snprintf(buf, sizeof(buf), LV_SYMBOL_EYE_CLOSE " %lum", (unsigned long)(SCREEN_OFF_MS / 60000));
   }
   lv_label_set_text(lbl_screen, buf);
 }
