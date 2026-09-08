@@ -1516,6 +1516,7 @@ static lv_obj_t * make_bell(lv_obj_t * parent) {
   lv_obj_set_style_line_width(ln, 2, 0);
   lv_obj_set_style_line_rounded(ln, true, 0);
   lv_obj_set_style_line_color(ln, lv_color_hex(0xFF3300), 0);
+  lv_obj_set_style_line_opa(ln, LV_OPA_50, 0);   // as dim as the OFF bell under it
   lv_obj_remove_flag(ln, LV_OBJ_FLAG_CLICKABLE);
   return box;
 }
@@ -1969,12 +1970,14 @@ static void create_brightness_panel(void) {
   lv_obj_t * hb = make_button(bl_panel, h24 ? "24H" : "12H", h24_btn_cb, NULL, 64, 26);
   lv_obj_align(hb, LV_ALIGN_TOP_RIGHT, 0, -4);
   lbl_h24 = lv_obj_get_child(hb, 0);
+  lv_obj_set_style_text_font(lbl_h24, &lv_font_montserrat_14, 0);
 
 #if SCREEN_OFF_MS > 0
   // Screen timeout toggle (auto-off after SCREEN_OFF_MS / always on), left of it
   lv_obj_t * sb = make_button(bl_panel, "", screen_btn_cb, NULL, 76, 26);
   lv_obj_align(sb, LV_ALIGN_TOP_RIGHT, -68, -4);
   lbl_screen = lv_obj_get_child(sb, 0);
+  lv_obj_set_style_text_font(lbl_screen, &lv_font_montserrat_14, 0);
   screen_btn_refresh();
 #endif
 
