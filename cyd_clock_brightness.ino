@@ -2879,6 +2879,10 @@ static void boot_poll(void) {
         Serial.print("Connected to Wi-Fi network with IP Address: ");
         Serial.println(WiFi.localIP());
         if (boot_wifi_btn) { lv_obj_delete(boot_wifi_btn); boot_wifi_btn = NULL; }
+        // The escape button's job is done once Wi-Fi is up - the NTP wait
+        // that follows resolves in seconds, unlike BLE where the sync wait
+        // itself is the connect phase and the button must stay.
+        if (boot_tsrc_btn) { lv_obj_delete(boot_tsrc_btn); boot_tsrc_btn = NULL; }
         Serial.printf("free heap after Wi-Fi connect: %u\n", (unsigned)ESP.getFreeHeap());
         sntp_begin();
         boot_t0 = millis();
