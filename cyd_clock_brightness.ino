@@ -1902,7 +1902,7 @@ static void flip_btn_cb(lv_event_t * e) {
 static void screen_btn_refresh(void) {
   char buf[16];
   if (!screen_auto) {
-    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " ON");
+    snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " AOD");   // Always-On Display
   } else if (SCREEN_OFF_MS < 60000) {
     snprintf(buf, sizeof(buf), LV_SYMBOL_POWER " %lus", (unsigned long)(SCREEN_OFF_MS / 1000));
   } else {
