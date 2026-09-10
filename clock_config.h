@@ -79,18 +79,19 @@
 
 /* =========================================================================
  * 2. 폰트 선택
- *    번들 폰트: clock_fonts.h(DSEG Italic 68/Bold 68/30/26, DSEG14 Italic 20, 나눔고딕 26),
+ *    번들 폰트: clock_fonts.h(DSEG Italic 68/Bold 68/42/30/26, DSEG14 Italic 26/20, 나눔고딕 26),
  *    lunar_font.h(DSEG Italic 26/20 with '.', 나눔고딕 22 서브셋)
  * ========================================================================= */
 
 // HH:MM 큰 시각. 더 가늘게 보이려면 &font_dseg_68 (Italic Regular)로 교체.
 // 폭은 런타임에 폰트에서 실측하므로 교체해도 레이아웃이 자동으로 맞춰짐.
 #define FONT_TIME     &font_dseg_bold_68
-#define FONT_SEC      &font_dseg_30        // 초
-#define FONT_DATENUM  &font_dseg_26        // 양력 날짜 숫자
-#define FONT_KR       &font_kr_26          // 한글 요일 (일~토 글리프만 포함)
-// AM/PM. 숫자와 같은 기울기의 14세그먼트 이탤릭(DSEG14). 일반 글꼴로 되돌리려면
-// &lv_font_montserrat_20 (밝기 %·버튼·다이얼 숫자에 계속 쓰이므로 lv_conf.h 활성화는 유지).
+#define FONT_SEC      &font_dseg_42        // 초 (시각 숫자의 ~2/3 높이, 우하단 정렬)
+#define FONT_DATENUM  &font_dseg_26        // 양력 날짜 숫자 ("9-10")
+#define FONT_WD       &font_dseg14_wd_26   // 영문 요일 (DSEG14, "FRI" 등)
+#define FONT_KR       &font_kr_26          // 한글 (달력 요일 머리글·알람 요일 버튼)
+// PM 마커("P", 12시간제에서 PM일 때만 시각 좌상단에 표시). 숫자와 같은 기울기의
+// 14세그먼트 이탤릭(DSEG14).
 #define FONT_AMPM     &font_dseg14_ampm_20
 #define FONT_LUNAR         &font_kr_lunar_22     // "음"/"윤", 절기·명절 이름
 #define FONT_LUNAR_NUM     &font_dseg_lunar_26   // 음력 숫자(디지털 화면, 달력 제목)
@@ -101,10 +102,6 @@
 #define SHOW_GHOST_SEGMENTS 0
 #define GHOST_COLOR lv_color_hex(0xDDDDDD)
 
-// 날짜 줄에서 한글 요일 "(일)"을 아래로 내리는 픽셀 수. 한글 폰트와 DSEG
-// 숫자의 베이스라인 차이를 맞추는 값. 요일이 숫자보다 떠 보이면 늘리고,
-// 처져 보이면 줄임.
-#define WEEKDAY_BASELINE_NUDGE 4
 
 /* =========================================================================
  * 3. 글자 색상
@@ -457,7 +454,7 @@ static const theme_t THEMES[] = {
 //   CHIME_FROM/TO_HOUR : 울리는 시간대(포함 범위). 24시간 내내 울리려면 0/23
 //                        (밤 수면 방해를 막기 위해 기본은 7~22시)
 #define HOURLY_CHIME     1
-#define CHIME_TONE_HZ    2500
+#define CHIME_TONE_HZ    4000
 #define CHIME_BEEP_MS    60
 #define CHIME_GAP_MS     60
 #define CHIME_FROM_HOUR  7

@@ -214,6 +214,7 @@ static int xpt_frame(int32_t * rx, int32_t * ry) {
 
 // tm_wday: 0 = Sunday
 static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "금", "토"};
+static const char * const WEEKDAYS_EN[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
 
 // ======================= Depth / 3-D look ================================
 // Every face uses the same lighting: light from the top, shadows falling
@@ -228,6 +229,7 @@ static const char * const WEEKDAY_KR[7] = {"일", "월", "화", "수", "목", "�
 #define MAX_CARDS             4    // plates registered for theme recoloring
 
 static lv_obj_t * label_ampm;
+static lv_obj_t * ap_box;            // fixed-width cell for the PM marker
 static lv_obj_t * label_hm;
 static lv_obj_t * label_sec;
 static lv_obj_t * label_datenum;
@@ -1253,17 +1255,6 @@ static int32_t text_width(const lv_font_t * font, const char * txt) {
   return p.x;
 }
 
-static int32_t max_weekday_width(const lv_font_t * font) {
-  int32_t m = 0;
-  for (int i = 0; i < 7; i++) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[i]);
-    int32_t w = text_width(font, buf);
-    if (w > m) m = w;
-  }
-  return m;
-}
-
 // Transparent, unpadded, non-scrollable container.
 // Not clickable, so presses fall through to the screen and open the panel.
 static lv_obj_t * make_box(lv_obj_t * parent) {
@@ -1384,35 +1375,31 @@ static void timer_cb(lv_timer_t * timer) {
       if (changed) { al_update_label(); al_mark_dirty(); }
     }
 
-    char ampm[4];
-    strftime(ampm, sizeof(ampm), "%p", &t);    // "AM" / "PM"
-
     if (h24) {
       snprintf(buf, sizeof(buf), "%02d:%02d", t.tm_hour, t.tm_min);
       lv_label_set_text(label_hm, buf);
       lv_label_set_text(label_hm_sh, buf);
-      // Empty (not hidden) so the seconds keep their bottom slot in the
-      // SPACE_BETWEEN column.
-      lv_label_set_text(label_ampm, "");
     } else {
       int h12 = t.tm_hour % 12;
       if (h12 == 0) h12 = 12;
       snprintf(buf, sizeof(buf), "%d:%02d", h12, t.tm_min);
       lv_label_set_text(label_hm, buf);
       lv_label_set_text(label_hm_sh, buf);
-      lv_label_set_text(label_ampm, ampm);
+      // PM shows a single "P"; AM shows nothing, but the marker cell keeps
+      // its width so the time block does not shift at noon/midnight.
+      lv_label_set_text(label_ampm, (t.tm_hour >= 12) ? "P" : "");
     }
   }
 
   if (t.tm_mday != last_mday) {
     last_mday = t.tm_mday;
     char buf[16];
-    snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
-             t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
+    // Month-day without the year or leading zeros, weekday in English -
+    // "FRI 9-10" (same date row as the esp32-c3 clock)
+    snprintf(buf, sizeof(buf), "%d-%d", t.tm_mon + 1, t.tm_mday);
     lv_label_set_text(label_datenum, buf);
-    snprintf(buf, sizeof(buf), "(%s)", WEEKDAY_KR[t.tm_wday]);
-    lv_label_set_text(label_wd, buf);
-    // Red days show the whole "(일)" inverted: a red pill with light text
+    lv_label_set_text(label_wd, WEEKDAYS_EN[t.tm_wday]);
+    // Red days show the whole weekday inverted: a red pill with light text
     bool red_day = kr_is_red_day(&t);
     lv_obj_set_style_text_color(label_wd,
         red_day ? lv_color_hex(0xFFFFFF) : WEEKDAY_COLOR_NORMAL, 0);
@@ -1813,6 +1800,10 @@ static void time_fmt_apply(void) {
   lv_obj_set_width(label_hm, w);
   lv_obj_set_width(label_hm_sh, w);
   if (label_ghost) lv_obj_set_width(label_ghost, w);
+  if (ap_box) {
+    if (h24) lv_obj_add_flag(ap_box, LV_OBJ_FLAG_HIDDEN);
+    else     lv_obj_remove_flag(ap_box, LV_OBJ_FLAG_HIDDEN);
+  }
   if (lbl_h24) lv_label_set_text(lbl_h24, h24 ? "24H" : "12H");
   time_fmt_dirty = true;   // timer_cb re-renders the hour on its next tick
   al_update_label();
@@ -2472,6 +2463,10 @@ void lv_create_main_gui(void) {
   lv_style_init(&style_kr);
   lv_style_set_text_font(&style_kr, FONT_KR);
 
+  static lv_style_t style_wd;
+  lv_style_init(&style_wd);
+  lv_style_set_text_font(&style_wd, FONT_WD);
+
   // ---- Fixed field widths, measured from the fonts themselves.
   // DSEG is a monospaced seven-segment face, so these never change at runtime.
   // The bold face is wider than the regular one, and this picks that up
@@ -2493,20 +2488,19 @@ void lv_create_main_gui(void) {
   w_hm_12 = w_hm_24 - lead_blank;
   const int32_t w_hm    = h24 ? w_hm_24 : w_hm_12;
   const int32_t w_sec   = 2 * max_digit_width(FONT_SEC) + 2;
-  const int32_t w_ampm  = LV_MAX(text_width(FONT_AMPM, "AM"),
-                                 text_width(FONT_AMPM, "PM")) + 2;
-  const int32_t w_col   = LV_MAX(w_sec, w_ampm);
+  const int32_t w_ampm  = text_width(FONT_AMPM, "P") + 2;
   const int32_t h_time  = lv_font_get_line_height(FONT_TIME);
-  const int32_t w_dnum  = 8 * max_digit_width(FONT_DATENUM)
-                          + 2 * glyph_width(FONT_DATENUM, '-') + 2;
-  const int32_t w_wd    = max_weekday_width(FONT_KR) + 2;
+  const int32_t w_wd    = text_width(FONT_WD, "WED") + 10;   // widest weekday + pill padding
 
   // Bold digits are wider, so the time row can outgrow the 320 px landscape
   // width. Shout about it on the serial monitor rather than silently clipping.
-  Serial.printf("time row width (24 h, worst case): %ld px (screen %d px)\n",
-                (long)(w_hm_24 + w_col + 8), SCREEN_HEIGHT);
+  // 24-hour: [HH:MM][SS]; 12-hour adds the marker cell but sheds the blank
+  // lead-in of the '1' cell.
+  Serial.printf("time row width (24 h %ld px / 12 h %ld px, screen %d px)\n",
+                (long)(w_hm_24 + 8 + w_sec),
+                (long)(w_ampm + 8 + w_hm_12 + 8 + w_sec), SCREEN_HEIGHT);
 
-  // ================= Date row: [ 2026-08-21 ][ (금) ] =================
+  // ================= Date row: [ FRI ][ 9-10 ] =================
   lv_obj_t * date_row = make_box(face_digital);
   lv_obj_set_size(date_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   // Row offsets place the whole block (date / time / lunar line) with equal
@@ -2518,32 +2512,42 @@ void lv_create_main_gui(void) {
   lv_obj_set_flex_align(date_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(date_row, 8, 0);
 
-  label_datenum = lv_label_create(date_row);
-  lv_label_set_text(label_datenum, "2026-01-01");
-  lv_obj_add_style(label_datenum, &style_datenum, 0);
-  lv_obj_set_width(label_datenum, w_dnum);
-  lv_obj_set_style_text_align(label_datenum, LV_TEXT_ALIGN_CENTER, 0);
-  // lv_obj_set_style_text_color(label_datenum, lv_color_hex(0x992000), 0);
-
+  // Weekday first (DSEG14 letters, red pill on red days), then the month-day
+  // without the year - the date label is content-sized, so the row recenters
+  // at day boundaries instead of padding a fixed field.
   label_wd = lv_label_create(date_row);
-  lv_label_set_text(label_wd, "(일)");
-  lv_obj_add_style(label_wd, &style_kr, 0);
+  lv_label_set_text(label_wd, "SUN");
+  lv_obj_add_style(label_wd, &style_wd, 0);
   lv_obj_set_width(label_wd, w_wd);
   lv_obj_set_style_text_align(label_wd, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_color(label_wd, WEEKDAY_COLOR_NORMAL, 0);
-  lv_obj_set_style_translate_y(label_wd, WEEKDAY_BASELINE_NUDGE, 0);
   // Inverted look for red days (bg toggled between TRANSP and COVER daily)
   lv_obj_set_style_bg_color(label_wd, WEEKDAY_COLOR_HOLIDAY, 0);
   lv_obj_set_style_bg_opa(label_wd, LV_OPA_TRANSP, 0);
   lv_obj_set_style_radius(label_wd, 6, 0);
 
-  // ================= Time row: [ HH:MM ][ AM/PM over SS ] =================
+  label_datenum = lv_label_create(date_row);
+  lv_label_set_text(label_datenum, "1-1");
+  lv_obj_add_style(label_datenum, &style_datenum, 0);
+  // lv_obj_set_style_text_color(label_datenum, lv_color_hex(0x992000), 0);
+
+  // ================= Time row: [ P ][ HH:MM ][ SS ] =================
   lv_obj_t * time_row = make_box(face_digital);
   lv_obj_set_size(time_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   lv_obj_align(time_row, LV_ALIGN_CENTER, 0, -1);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
   lv_obj_set_style_pad_column(time_row, 8, 0);
+
+  // PM marker cell: "P" top-aligned at the time's left in 12-hour PM,
+  // empty (width kept) in AM, hidden entirely in 24-hour mode.
+  ap_box = make_box(time_row);
+  lv_obj_set_size(ap_box, w_ampm, h_time);
+  label_ampm = lv_label_create(ap_box);
+  lv_label_set_text(label_ampm, "");
+  lv_obj_add_style(label_ampm, &style_ampm, 0);
+  lv_obj_align(label_ampm, LV_ALIGN_TOP_LEFT, 0, 2);   // top edge ~ digit tops
+  if (h24) lv_obj_add_flag(ap_box, LV_OBJ_FLAG_HIDDEN);
 
   // HH:MM, with the unlit segments painted underneath
   hm_box = make_box(time_row);
@@ -2586,22 +2590,13 @@ void lv_create_main_gui(void) {
   lv_label_set_long_mode(label_hm, LV_LABEL_LONG_CLIP);
   lv_obj_center(label_hm);
 
-  // Right column: AM/PM pinned to the top, seconds pinned to the bottom
-  lv_obj_t * col = make_box(time_row);
-  lv_obj_set_size(col, w_col, h_time);
-  lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_flex_align(col, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-  label_ampm = lv_label_create(col);
-  lv_label_set_text(label_ampm, "AM");
-  lv_obj_add_style(label_ampm, &style_ampm, 0);
-  lv_obj_set_width(label_ampm, w_col);
-  lv_obj_set_style_text_align(label_ampm, LV_TEXT_ALIGN_CENTER, 0);
-
-  label_sec = lv_label_create(col);
+  // Seconds at ~2/3 of the digit height, bottom-aligned by the row's
+  // cross-axis END alignment (DSEG glyphs sit on the line bottom in both
+  // fonts, so the digit bottoms coincide).
+  label_sec = lv_label_create(time_row);
   lv_label_set_text(label_sec, "00");
   lv_obj_add_style(label_sec, &style_sec, 0);
-  lv_obj_set_width(label_sec, w_col);
+  lv_obj_set_width(label_sec, w_sec);
   lv_obj_set_style_text_align(label_sec, LV_TEXT_ALIGN_CENTER, 0);
   // lv_obj_set_style_text_color(label_sec, lv_color_hex(0x992000), 0);
 
