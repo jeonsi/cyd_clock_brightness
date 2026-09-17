@@ -2920,6 +2920,7 @@ static void boot_poll(void) {
         lv_create_main_gui();
         Serial.printf("free heap after GUI: %u\n", (unsigned)ESP.getFreeHeap());
         boot_state = BOOT_DONE;
+        setCpuFrequencyMhz(CPU_FREQ_MHZ);   // boot ran at 80 MHz for brownout margin
         bl_apply();   // lift the boot-time backlight cap
         break;
       }
@@ -2944,7 +2945,10 @@ static void boot_poll(void) {
 }
 
 void setup() {
-  setCpuFrequencyMhz(CPU_FREQ_MHZ);   // before the radios and Serial come up
+  // Boot at 80 MHz: on a cold plug the supply is still settling while the
+  // caps charge, the backlight lights and the radio calibrates - every mA
+  // shaved here is brownout margin. CPU_FREQ_MHZ is applied at BOOT_DONE.
+  setCpuFrequencyMhz(80);
   Serial.begin(115200);
   delay(300);   // the first bytes after a reset get eaten while the USB-serial resyncs
   // Why did we boot? POWERON = plugged in, SW = ESP.restart()/panic-reboot,
@@ -3100,6 +3104,21 @@ void setup() {
   lv_obj_set_style_text_align(boot_label, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(boot_label);
 
+  if (rr == ESP_RST_POWERON) {
+    // Cold plug-in: the adapter and the board's caps are still settling
+    // when the first radio surge hits (measured: BROWNOUT once per cold
+    // boot on a weak supply). Wait it out with the panel dark so the
+    // radio bring-up does not stack on the backlight load; bl_apply()
+    // then restores the boot-capped brightness.
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWrite(BL_PIN, 0);
+#else
+    ledcWrite(BL_CHANNEL, 0);
+#endif
+    delay(2000);
+    bl_apply();
+  }
+
   if (time_sync_ble) {
     // No Wi-Fi: the iPhone's Current Time Service is the time source.
     lv_label_set_text(boot_label, "Starting BLE...");
@@ -3114,11 +3133,6 @@ void setup() {
                                 tsrc_btn_cb, NULL, 110, 34);
     lv_obj_align(boot_tsrc_btn, LV_ALIGN_BOTTOM_MID, 0, -14);
   } else {
-    // Cold plug-in: the adapter and the board's caps are still settling when
-    // the Wi-Fi surge hits, and the very first boot browned out once every
-    // time (then always succeeded on the warm retry). Give the supply a
-    // moment before starting the radio.
-    if (rr == ESP_RST_POWERON) delay(1200);
     // The linked-in BT controller statically reserves ~60 KB of DRAM even
     // when unused. On a Wi-Fi boot BLE stays off until the next reboot
     // (mode switching reboots anyway), so hand that memory back to the
