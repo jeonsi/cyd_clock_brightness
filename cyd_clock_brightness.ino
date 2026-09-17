@@ -2497,8 +2497,8 @@ void lv_create_main_gui(void) {
   // 24-hour: [HH:MM][SS]; 12-hour adds the marker cell but sheds the blank
   // lead-in of the '1' cell.
   Serial.printf("time row width (24 h %ld px / 12 h %ld px, screen %d px)\n",
-                (long)(w_hm_24 + 8 + w_sec),
-                (long)(w_ampm + 8 + w_hm_12 + 8 + w_sec), SCREEN_HEIGHT);
+                (long)(w_hm_24 + 4 + w_sec),
+                (long)(w_ampm + 4 + w_hm_12 + 4 + w_sec), SCREEN_HEIGHT);
 
   // ================= Date row: [ FRI ][ 9-10 ] =================
   lv_obj_t * date_row = make_box(face_digital);
@@ -2537,7 +2537,9 @@ void lv_create_main_gui(void) {
   lv_obj_align(time_row, LV_ALIGN_CENTER, 0, -1);
   lv_obj_set_flex_flow(time_row, LV_FLEX_FLOW_ROW);
   lv_obj_set_flex_align(time_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(time_row, 8, 0);
+  // 4 px gaps: with the 42 px seconds the 24-hour row measured exactly the
+  // 320 px screen at 8 px - this buys back a safety margin (24 h: 316 px)
+  lv_obj_set_style_pad_column(time_row, 4, 0);
 
   // PM marker cell: "P" top-aligned at the time's left in 12-hour PM,
   // empty (width kept) in AM, hidden entirely in 24-hour mode.
